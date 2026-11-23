@@ -1,5 +1,5 @@
 import { keccak256 } from "viem";
-import { ASSETS, type AssetId } from "../src/assets";
+import { type Asset, ASSETS, type AssetId } from "../src/assets";
 import { MockWallet } from "../src/chains/mock";
 import type { Wallets } from "../src/chains/types";
 import { type Config, loadConfig } from "../src/config";
@@ -44,7 +44,13 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
   } as NodeJS.ProcessEnv);
 }
 
-export function setup(prices: Partial<Record<AssetId, number>> = { BTC: 60000, ETH: 2000, XMR: 500, SOL: 100, USDC: 1, ZEC: 50 }) {
+export const TEST_PRICES: Partial<Record<AssetId, number>> = {
+  BTC: 60000, ETH: 2000, XMR: 500, SOL: 100, ZEC: 50, BNB: 500, POL: 0.5, TRX: 0.25,
+  "USDT-ETH": 1, "USDT-TRON": 1, "USDT-BSC": 1, "USDT-SOL": 1, "USDT-POL": 1,
+  "USDC-ETH": 1, "USDC-SOL": 1, "USDC-BASE": 1, "USDC-ARB": 1, "USDC-POL": 1, "DAI-ETH": 1,
+};
+
+export function setup(prices: Partial<Record<AssetId, number>> = { ...TEST_PRICES }) {
   const cfg = testConfig();
   const db = new Db(":memory:");
   const source = staticSource(prices);
@@ -65,7 +71,7 @@ export class FakeDex implements DexProvider {
 
   constructor(private rate: number) {}
 
-  async supports() {
+  async supports(_from: Asset, _to: Asset): Promise<boolean> {
     return true;
   }
 

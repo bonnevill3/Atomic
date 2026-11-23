@@ -52,3 +52,26 @@ describe("money", () => {
     expect(rescale(10n ** 18n, 18, 8)).toBe(10n ** 8n);
   });
 });
+
+describe("new stablecoin networks", () => {
+  it("validates Tron addresses (base58check, 0x41 prefix)", () => {
+    expect(isValidAddress("TRON", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "mainnet")).toBe(true); // USDT contract
+    expect(isValidAddress("TRON", PLACEHOLDER_ADDRESS.TRON, "mainnet")).toBe(true);
+    expect(isValidAddress("TRON", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6u", "mainnet")).toBe(false); // checksum
+    expect(isValidAddress("TRON", PLACEHOLDER_ADDRESS.ETH, "mainnet")).toBe(false);
+  });
+  it("uses EVM validation on BSC, Polygon, Base and Arbitrum", () => {
+    for (const chain of ["BSC", "POL", "BASE", "ARB"] as const) {
+      expect(isValidAddress(chain, PLACEHOLDER_ADDRESS.ETH, "mainnet")).toBe(true);
+      expect(isValidAddress(chain, PLACEHOLDER_ADDRESS.TRON, "mainnet")).toBe(false);
+    }
+  });
+  it("lists 11 depositable stablecoins and hides gas-only assets", () => {
+    const stables = Object.values(ASSETS).filter((a) => a.contracts && a.depositable);
+    expect(stables.map((a) => a.id).sort()).toEqual([
+      "DAI-ETH", "USDC-ARB", "USDC-BASE", "USDC-ETH", "USDC-POL", "USDC-SOL",
+      "USDT-BSC", "USDT-ETH", "USDT-POL", "USDT-SOL", "USDT-TRON",
+    ]);
+    expect(["BNB", "POL", "TRX"].every((id) => !ASSETS[id as keyof typeof ASSETS].listed)).toBe(true);
+  });
+});

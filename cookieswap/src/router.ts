@@ -40,7 +40,9 @@ export interface PlanInput {
 }
 
 /** Rough deposit confirmation time per chain, for ETA display. */
-const CONFIRM_SECONDS = { BTC: 1200, ETH: 160, XMR: 1200, SOL: 1, ZEC: 300 } as const;
+const CONFIRM_SECONDS = {
+  BTC: 1200, ETH: 160, BSC: 45, POL: 150, BASE: 60, ARB: 30, TRON: 60, SOL: 15, XMR: 1200, ZEC: 300,
+} as const;
 /** Bridge asset for XMR deposits paid out via a DEX. */
 const BRIDGE: Asset = ASSETS.ETH;
 

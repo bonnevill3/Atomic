@@ -101,9 +101,12 @@ export class Db {
     `);
   }
 
-  /** Atomically reserve the next HD index for a chain. Index 0 is reserved for the hot/inventory wallet. */
-  allocateIndex(chain: ChainId): number {
-    const tx = this.db.transaction((c: ChainId) => {
+  /**
+   * Atomically reserve the next HD index for a key family (see `keyFamily`: all EVM chains share one).
+   * Index 0 is reserved for the hot/inventory wallet.
+   */
+  allocateIndex(family: string): number {
+    const tx = this.db.transaction((c: string) => {
       const row = this.db.prepare("SELECT next_index FROM address_counters WHERE chain = ?").get(c) as
         | { next_index: number }
         | undefined;
@@ -113,7 +116,7 @@ export class Db {
         .run(c, index + 1);
       return index;
     });
-    return tx(chain);
+    return tx(family);
   }
 
   insertOrder(o: NewOrder): OrderRow {

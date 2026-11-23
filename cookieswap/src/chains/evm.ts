@@ -9,8 +9,8 @@ import {
   type Transport,
 } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
-import { mainnet, sepolia } from "viem/chains";
-import type { Network } from "../assets";
+import { arbitrum, base, bsc, mainnet, polygon, sepolia } from "viem/chains";
+import type { EvmChainId, Network } from "../assets";
 import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult, SendSource } from "./types";
 
 const GAS_PLAIN = 21_000n;
@@ -27,16 +27,30 @@ export class EvmKeys {
   }
 }
 
-/** Shared JSON-RPC access for the ETH wallet and the ERC-20 wallets. */
+const VIEM_CHAIN: Record<EvmChainId, Chain> = { ETH: mainnet, BSC: bsc, POL: polygon, BASE: base, ARB: arbitrum };
+const DEFAULT_RPC: Record<EvmChainId, string> = {
+  ETH: "https://ethereum-rpc.publicnode.com",
+  BSC: "https://bsc-rpc.publicnode.com",
+  POL: "https://polygon-bor-rpc.publicnode.com",
+  BASE: "https://base-rpc.publicnode.com",
+  ARB: "https://arbitrum-one-rpc.publicnode.com",
+};
+
+/** JSON-RPC access to one EVM chain, shared by its native and ERC-20 wallets. */
 export class EvmRpc {
   readonly client: PublicClient;
   readonly chain: Chain;
   private transport: Transport;
 
-  constructor(network: Network, rpcUrl?: string, transport?: Transport) {
-    this.chain = network === "mainnet" ? mainnet : sepolia;
-    const url =
-      rpcUrl ?? (network === "mainnet" ? "https://ethereum-rpc.publicnode.com" : "https://ethereum-sepolia-rpc.publicnode.com");
+  constructor(
+    readonly chainId: EvmChainId,
+    network: Network,
+    rpcUrl?: string,
+    transport?: Transport,
+  ) {
+    if (network === "testnet" && chainId !== "ETH") throw new Error(`${chainId}: only mainnet is supported`);
+    this.chain = network === "testnet" ? sepolia : VIEM_CHAIN[chainId];
+    const url = rpcUrl ?? (network === "testnet" ? "https://ethereum-sepolia-rpc.publicnode.com" : DEFAULT_RPC[chainId]);
     this.transport = transport ?? http(url);
     this.client = createPublicClient({ chain: this.chain, transport: this.transport });
   }

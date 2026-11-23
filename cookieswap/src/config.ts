@@ -25,6 +25,20 @@ const schema = z.object({
   BTC_CONFIRMATIONS: z.coerce.number().int().min(0).default(2),
   ETH_RPC_URL: z.string().optional(),
   ETH_CONFIRMATIONS: z.coerce.number().int().min(0).default(12),
+  /** Other EVM chains for stablecoin deposits (defaults: publicnode.com RPCs). */
+  BSC_RPC_URL: z.string().optional(),
+  BSC_CONFIRMATIONS: z.coerce.number().int().min(0).default(15),
+  POL_RPC_URL: z.string().optional(),
+  POL_CONFIRMATIONS: z.coerce.number().int().min(0).default(64),
+  BASE_RPC_URL: z.string().optional(),
+  BASE_CONFIRMATIONS: z.coerce.number().int().min(0).default(30),
+  ARB_RPC_URL: z.string().optional(),
+  ARB_CONFIRMATIONS: z.coerce.number().int().min(0).default(60),
+  /** Tron (TRC-20). Confirmed = solidified by the network (~1 min). */
+  TRON_API_URL: z.string().default("https://api.trongrid.io"),
+  TRONGRID_API_KEY: z.string().optional(),
+  /** Solana (SPL). Confirmed = "finalized" commitment. */
+  SOLANA_RPC_URL: z.string().default("https://api.mainnet-beta.solana.com"),
   /** monero-wallet-rpc started with --disable-rpc-login, reachable only on localhost / a private network. */
   XMR_WALLET_RPC_URL: z.string().default("http://127.0.0.1:18083/json_rpc"),
   XMR_CONFIRMATIONS: z.coerce.number().int().min(1).default(10),

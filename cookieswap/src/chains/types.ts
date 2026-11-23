@@ -49,6 +49,8 @@ export interface ChainWallet {
   inventoryBalance(): Promise<bigint>;
   /** Estimated network fee for one send (with a memo if `memo`). */
   estimateSendFee(memo: boolean): Promise<Fee>;
+  /** Token wallets: native gas held by the inventory account (pays top-ups / fees). */
+  gasBalance?(): Promise<Fee>;
   send(req: SendRequest): Promise<SendResult>;
 }
 

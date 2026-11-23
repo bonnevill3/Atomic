@@ -33,9 +33,10 @@ function assetById(id) {
 function fillSelects() {
   const from = $("from");
   const to = $("to");
+  const label = (a) => (a.code ? `${a.symbol} · ${a.code}` : a.symbol);
   for (const a of state.assets) {
-    if (a.canSend) from.add(new Option(a.symbol, a.id));
-    to.add(new Option(a.symbol, a.id));
+    if (a.canSend) from.add(new Option(label(a), a.id));
+    to.add(new Option(label(a), a.id));
   }
   from.value = "BTC";
   to.value = "XMR";
@@ -80,9 +81,12 @@ async function getQuote() {
     if (seq !== state.quoteSeq) return;
     const b = q.best;
     $("out").textContent = fmt(b.amountOut);
-    $("q-rate").textContent = `1 ${from} ≈ ${fmt(b.rate, 6)} ${to}`;
+    const fs = symbolOf(from);
+    $("q-rate").textContent = `1 ${fs} ≈ ${fmt(b.rate, 6)} ${symbolOf(to)}`;
     $("q-route").textContent = b.route;
-    $("q-fee").textContent = `${fmt(b.serviceFee)} ${from}`;
+    $("q-fee").textContent = `${fmt(b.serviceFee)} ${fs}`;
+    $("q-netfee").textContent = `${fmt(b.networkFee)} ${fs}`;
+    $("q-netfee-row").hidden = Number(b.networkFee) === 0;
     $("q-eta").textContent = eta(b.etaSeconds);
     $("quote").hidden = false;
     $("q-review").textContent = `Orders above $${state.health.manualReviewUsd} are checked by hand after your deposit confirms, before the swap runs. This can add some time.`;
@@ -164,14 +168,19 @@ async function refreshOrder() {
   }
 }
 
+function symbolOf(id) {
+  const a = assetById(id);
+  return a ? a.symbol : id;
+}
+
 function renderOrder(o) {
   const done = ["completed", "refunded", "expired"].includes(o.status);
   $("deposit-box").hidden = o.status !== "awaiting_deposit";
-  $("d-amount").textContent = `${fmt(o.depositAmount)} ${o.from}`;
+  $("d-amount").textContent = `${fmt(o.depositAmount)} ${symbolOf(o.from)}`;
   $("d-address").textContent = o.depositAddress;
   const from = assetById(o.from);
   $("d-network").textContent = from && from.token
-    ? `Only send ${o.from} on ${o.fromNetwork}. Tokens sent on another network cannot be recovered.`
+    ? `Only send ${symbolOf(o.from)} on ${o.fromNetwork}. Tokens sent on another network cannot be recovered.`
     : `Network: ${o.fromNetwork}`;
   $("d-network").className = from && from.token ? "notice" : "fine";
   const left = Math.max(0, o.expiresAt - Date.now());
@@ -187,7 +196,7 @@ function renderOrder(o) {
   $("o-status").className = `status ${cls}`;
 
   const out = o.amountOut || o.quotedOut;
-  $("o-out").textContent = `${o.amountOut ? "" : "≈ "}${fmt(out)} ${o.to}`;
+  $("o-out").textContent = `${o.amountOut ? "" : "≈ "}${fmt(out)} ${symbolOf(o.to)} (${o.toNetwork})`;
   $("o-recipient").textContent = o.recipient;
   $("o-route").textContent = o.route;
   $("o-id").textContent = o.id;

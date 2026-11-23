@@ -5,7 +5,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import QRCode from "qrcode";
 import { z } from "zod";
-import { ASSETS, type Asset, getAsset, isValidAddress, tokenContract } from "./assets";
+import { ASSETS, type Asset, getAsset, isEvmChain, isValidAddress, keyFamily, NETWORK_CODE, tokenContract } from "./assets";
 import { MockWallet } from "./chains/mock";
 import type { Wallets } from "./chains/types";
 import type { Config } from "./config";
@@ -42,7 +42,7 @@ class ApiError extends Error {
 
 function asset(id: string): Asset {
   const a = getAsset(id);
-  if (!a) throw new ApiError(400, `unknown asset ${id}`);
+  if (!a || !a.listed) throw new ApiError(400, `unknown asset ${id}`);
   return a;
 }
 
@@ -94,7 +94,7 @@ function orderView(o: OrderRow) {
   };
 }
 
-const URI_SCHEME: Record<string, string> = { BTC: "bitcoin", ETH: "ethereum", XMR: "monero" };
+const EVM_CHAIN_ID: Record<string, number> = { ETH: 1, BSC: 56, POL: 137, BASE: 8453, ARB: 42161 };
 
 export async function buildServer(cfg: Config, db: Db, router: Router, wallets: Wallets, oracle: PriceOracle): Promise<FastifyInstance> {
   // Logger off on purpose: no request logs, no IP addresses stored anywhere.
@@ -126,9 +126,10 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     usdValue(amountIn, from, (await oracle.price(from)).usd) > cfg.MANUAL_REVIEW_USD;
 
   app.get("/api/assets", async () =>
-    Object.values(ASSETS).map((a) => ({
+    Object.values(ASSETS).filter((a) => a.listed).map((a) => ({
       id: a.id, symbol: a.symbol, name: a.name, network: a.network, chain: a.chain, decimals: a.decimals,
       token: tokenContract(a, cfg.NETWORK) ?? null,
+      code: a.contracts ? NETWORK_CODE[a.chain] : null,
       canSend: a.depositable && !!wallets[a.id], canReceive: true,
     })),
   );
@@ -165,8 +166,8 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     const plan = await router.best({ from, to, amountIn, recipient: b.recipient, dry: true });
 
     const wallet = wallets[from.id]!;
-    // ERC-20 tokens share the ETH index space, so allocate per chain.
-    const dep = await wallet.depositAddress(db.allocateIndex(from.chain));
+    // Chains on the same key tree (all EVM chains) share one index counter, so no address is reused.
+    const dep = await wallet.depositAddress(db.allocateIndex(keyFamily(from.chain)));
     const token = randomBytes(24).toString("base64url");
     const order = db.insertOrder({
       id: randomBytes(12).toString("hex"),
@@ -204,10 +205,13 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     const amount = fromAtomic(BigInt(o.amount_in), from);
     const token = tokenContract(from, cfg.NETWORK);
     const uri =
-      token ? `ethereum:${token}/transfer?address=${o.deposit_address}&uint256=${o.amount_in}` // EIP-681
+      token && isEvmChain(from.chain) // EIP-681 token transfer with chain id
+        ? `ethereum:${token}@${EVM_CHAIN_ID[from.chain]}/transfer?address=${o.deposit_address}&uint256=${o.amount_in}`
+      : token && from.chain === "SOL" ? `solana:${o.deposit_address}?amount=${amount}&spl-token=${token}` // Solana Pay
+      : from.chain === "TRON" ? o.deposit_address // Tron wallets scan the plain address
       : from.chain === "XMR" ? `monero:${o.deposit_address}?tx_amount=${amount}`
       : from.chain === "BTC" ? `bitcoin:${o.deposit_address}?amount=${amount}`
-      : `${URI_SCHEME[from.chain]}:${o.deposit_address}`;
+      : `ethereum:${o.deposit_address}@${EVM_CHAIN_ID[from.chain]}`;
     const svg = await QRCode.toString(uri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
     return reply.type("image/svg+xml").send(svg);
   });
@@ -240,7 +244,13 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
 
       admin.get("/admin/inventory", async () => {
         const out: Record<string, string> = {};
-        for (const [id, w] of Object.entries(wallets)) out[id] = fromAtomic(await w!.inventoryBalance(), getAsset(id)!);
+        for (const [id, w] of Object.entries(wallets)) {
+          out[id] = fromAtomic(await w!.inventoryBalance(), getAsset(id)!);
+          if (w!.gasBalance) {
+            const gas = await w!.gasBalance();
+            out[`${id} gas`] = `${fromAtomic(gas.amount, getAsset(gas.asset)!)} ${gas.asset}`;
+          }
+        }
         return out;
       });
 

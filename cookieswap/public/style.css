@@ -65,7 +65,7 @@ input, select, .out {
 }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .row input, .row .out { flex: 1; font-size: 20px; }
-.row select { flex: 0 0 120px; }
+.row select { flex: 0 0 160px; }
 .out { display: flex; align-items: center; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .flip {
   align-self: center; width: 40px; height: 40px; margin: -6px 0;
@@ -115,6 +115,7 @@ button { font: inherit; cursor: pointer; }
 .dev input { width: 100%; margin: 8px 0; }
 [hidden] { display: none !important; }
 @media (max-width: 420px) {
-  .row select { flex-basis: 96px; }
+  .row select { flex-basis: 132px; }
+  .row input, .row .out { font-size: 18px; }
   .steps { grid-template-columns: repeat(2, 1fr); }
 }

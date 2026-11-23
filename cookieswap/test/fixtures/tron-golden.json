@@ -1,0 +1,49 @@
+{
+ "trx": {
+  "raw_data": {
+   "ref_block_bytes": "a86d",
+   "ref_block_hash": "e636ed97f8df23dd",
+   "expiration": 1795438002000,
+   "contract": [
+    {
+     "parameter": {
+      "value": {
+       "owner_address": "4185008a5ee8e442f19ab6f2108ebac48faa69202c",
+       "to_address": "41ed7c68fe5f67643be4e9ebab618a98516b97166a",
+       "amount": 1
+      },
+      "type_url": "type.googleapis.com/protocol.TransferContract"
+     },
+     "type": "TransferContract"
+    }
+   ],
+   "timestamp": 1795437944275
+  },
+  "raw_data_hex": "0a02a86d2208e636ed97f8df23dd40d0fec6c3a0345a65080112610a2d747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e5472616e73666572436f6e747261637412300a154185008a5ee8e442f19ab6f2108ebac48faa69202c121541ed7c68fe5f67643be4e9ebab618a98516b97166a180170d3bbc3c3a034",
+  "txID": "10486f9f232f67ce6c8346483f7101e94e23caebd70a4a8cd87162ae26905e27"
+ },
+ "trig": {
+  "raw_data": {
+   "ref_block_bytes": "a86d",
+   "ref_block_hash": "e636ed97f8df23dd",
+   "expiration": 1795438002000,
+   "contract": [
+    {
+     "parameter": {
+      "value": {
+       "owner_address": "4185008a5ee8e442f19ab6f2108ebac48faa69202c",
+       "contract_address": "41a614f803b6fd780986a42c78ec9c7f77e6ded13c",
+       "data": "a9059cbb000000000000000000000000ed7c68fe5f67643be4e9ebab618a98516b97166a000000000000000000000000000000000000000000000000000000000001e240"
+      },
+      "type_url": "type.googleapis.com/protocol.TriggerSmartContract"
+     },
+     "type": "TriggerSmartContract"
+    }
+   ],
+   "timestamp": 1795437944413,
+   "fee_limit": 30000000
+  },
+  "raw_data_hex": "0a02a86d2208e636ed97f8df23dd40d0fec6c3a0345aae01081f12a9010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e54726967676572536d617274436f6e747261637412740a154185008a5ee8e442f19ab6f2108ebac48faa69202c121541a614f803b6fd780986a42c78ec9c7f77e6ded13c2244a9059cbb000000000000000000000000ed7c68fe5f67643be4e9ebab618a98516b97166a000000000000000000000000000000000000000000000000000000000001e24070ddbcc3c3a03490018087a70e",
+  "txID": "514384a96ffcc0c5f01472a98076e7e4cd382970a610b7ef5e56140872394710"
+ }
+}

@@ -83,7 +83,11 @@ export class PriceOracle {
     const now = Date.now();
     for (const a of this.assets) {
       const vals = results.map((r) => r[a.id]).filter((v): v is number => typeof v === "number" && v > 0);
-      if (vals.length === 0) continue;
+      if (vals.length === 0) {
+        // No source confirms a price any more: drop it instead of serving a stale one.
+        this.cache.delete(a.id);
+        continue;
+      }
       vals.sort((x, y) => x - y);
       const mid = vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2;
       const deviationBps = Math.round(((vals[vals.length - 1] - vals[0]) / vals[0]) * 10_000);
