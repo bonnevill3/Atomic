@@ -119,7 +119,7 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 76 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
+npm test            # 77 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
