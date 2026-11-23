@@ -10,6 +10,7 @@
 3. [Stappenplan](03-stappenplan.md): de fases om ETH → XMR in deze fork te bouwen.
 4. [Beveiliging](04-beveiliging.md): threat model en checklist.
 5. [Fork-administratie](FORK.md): upstream, wijzigingen, upstream bijhouden, bouwen.
+6. [Wagyu.xyz analysis](05-wagyu-analysis.md): how it works, whether it is custodial (yes, in practice), the Nov 2026 hack, and lessons (EN).
 
 ## Belangrijkste punten
 - **BTC → XMR hoef je niet te bouwen.** Dat is precies wat eigenwallet doet en wat je nu in de fork hebt. Interface: de taker koopt via de Tauri-GUI en beheert swaps met de `swap` CLI. De maker gebruikt `asb` met de `asb-controller` REPL in de terminal.
