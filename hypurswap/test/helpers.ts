@@ -40,7 +40,7 @@ export function staticSource(prices: Partial<Record<AssetId, number>>): PriceSou
 export function testConfig(overrides: Record<string, string> = {}): Config {
   return loadConfig({
     CHAINS: "mock", DB_PATH: ":memory:", ENGINE_INTERVAL_SECONDS: "1", SERVICE_FEE_BPS: "50",
-    INVENTORY_SPREAD_BPS: "100", MAX_RATE_DRIFT_BPS: "200", ...overrides,
+    INVENTORY_SPREAD_BPS: "100", MAX_RATE_DRIFT_BPS: "200", MANUAL_REVIEW_USD: "1000000", ...overrides,
   } as NodeJS.ProcessEnv);
 }
 

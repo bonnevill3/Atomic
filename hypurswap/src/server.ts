@@ -13,7 +13,9 @@ import type { Db, OrderRow, OrderStatus } from "./db";
 import { log } from "./log";
 import { fromAtomic, toAtomic } from "./money";
 import { OracleError } from "./oracle";
+import { usdValue } from "./money";
 import { QuoteError } from "./providers/types";
+import type { PriceOracle } from "./oracle";
 import type { RoutePlan, Router } from "./router";
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest();
@@ -44,9 +46,10 @@ function asset(id: string): Asset {
   return a;
 }
 
-function quoteView(p: RoutePlan) {
+function quoteView(p: RoutePlan, manualReview: boolean) {
   const rate = Number(fromAtomic(p.amountOut, p.to)) / Number(fromAtomic(p.amountIn, p.from));
   return {
+    manualReview,
     route: p.label,
     kind: p.kind,
     amountIn: fromAtomic(p.amountIn, p.from),
@@ -65,7 +68,8 @@ function orderView(o: OrderRow) {
   const to = getAsset(o.to_asset)!;
   const fmt = (v: string | null, a: Asset) => (v === null ? null : fromAtomic(BigInt(v), a));
   const publicStatus: Record<OrderStatus, string> = {
-    awaiting_deposit: "awaiting_deposit", confirming: "confirming", executing: "processing",
+    awaiting_deposit: "awaiting_deposit", confirming: "confirming", awaiting_approval: "manual_review",
+    approved: "processing", executing: "processing",
     dex_pending: "processing", completed: "completed", refund_pending: "refunding", refunding: "refunding",
     refunded: "refunded", expired: "expired", needs_review: "under_review",
   };
@@ -90,7 +94,7 @@ function orderView(o: OrderRow) {
 
 const URI_SCHEME: Record<string, string> = { BTC: "bitcoin", ETH: "ethereum", XMR: "monero" };
 
-export async function buildServer(cfg: Config, db: Db, router: Router, wallets: Wallets): Promise<FastifyInstance> {
+export async function buildServer(cfg: Config, db: Db, router: Router, wallets: Wallets, oracle: PriceOracle): Promise<FastifyInstance> {
   // Logger off on purpose: no request logs, no IP addresses stored anywhere.
   const app = Fastify({ logger: false, trustProxy: false, bodyLimit: 16 * 1024 });
 
@@ -111,7 +115,13 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     return reply.status(500).send({ error: "internal error" });
   });
 
-  app.get("/api/health", async () => ({ ok: true, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN }));
+  app.get("/api/health", async () => ({
+    ok: true, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN, manualReviewUsd: cfg.MANUAL_REVIEW_USD,
+  }));
+
+  /** Indicative only: the binding check runs on the confirmed deposit in the engine. */
+  const needsReview = async (amountIn: bigint, from: Asset) =>
+    usdValue(amountIn, from, (await oracle.price(from)).usd) > cfg.MANUAL_REVIEW_USD;
 
   app.get("/api/assets", async () =>
     Object.values(ASSETS).map((a) => ({
@@ -132,7 +142,8 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     }
     const recipient = b.recipient && isValidAddress(to.chain, b.recipient, cfg.NETWORK) ? b.recipient : undefined;
     const plans = await router.plan({ from, to, amountIn, recipient, dry: true });
-    return { best: quoteView(plans[0]), alternatives: plans.slice(1).map(quoteView) };
+    const review = await needsReview(amountIn, from);
+    return { best: quoteView(plans[0], review), alternatives: plans.slice(1).map((p) => quoteView(p, review)) };
   });
 
   app.post("/api/orders", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
@@ -169,7 +180,7 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
       deposit_index: dep.index,
       expires_at: Date.now() + cfg.ORDER_TTL_MINUTES * 60_000,
     });
-    return { token, order: orderView(order), quote: quoteView(plan) };
+    return { token, order: orderView(order), quote: quoteView(plan, await needsReview(amountIn, from)) };
   });
 
   const authorizedOrder = (req: FastifyRequest<{ Params: { id: string } }>): OrderRow => {
@@ -207,7 +218,19 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     app.register(async (admin) => {
       admin.addHook("onRequest", requireAdmin);
 
-      admin.get("/admin/orders", async () => db.listOrders(200));
+      admin.get<{ Querystring: { status?: string } }>("/admin/orders", async (req) => {
+        const rows = db.listOrders(500);
+        return req.query.status ? rows.filter((r) => r.status === req.query.status) : rows;
+      });
+
+      /** Safety net: release a large order for execution (it is still re-quoted and rate-checked). */
+      admin.post<{ Params: { id: string } }>("/admin/orders/:id/approve", async (req) => {
+        const o = db.getOrder(req.params.id);
+        if (!o || o.status !== "awaiting_approval") throw new ApiError(409, "only awaiting_approval orders can be approved");
+        db.transition(o.id, "awaiting_approval", { status: "approved", error: null });
+        log.info("order approved by operator", { order: o.id });
+        return orderView(db.getOrder(o.id)!);
+      });
 
       admin.get("/admin/inventory", async () => {
         const out: Record<string, string> = {};
@@ -222,7 +245,7 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
       admin.post<{ Params: { id: string } }>("/admin/orders/:id/refund", async (req) => {
         const o = db.getOrder(req.params.id);
         if (!o) throw new ApiError(404, "order not found");
-        if (!["awaiting_deposit", "confirming", "needs_review", "expired"].includes(o.status)) {
+        if (!["awaiting_deposit", "confirming", "awaiting_approval", "needs_review", "expired"].includes(o.status)) {
           throw new ApiError(409, `cannot refund from ${o.status}`);
         }
         db.transition(o.id, o.status, { status: "refund_pending", error: "manual refund" });

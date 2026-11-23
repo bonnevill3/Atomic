@@ -1,8 +1,8 @@
 {
-  "name": "instant-swap",
+  "name": "hypurswap",
   "version": "0.1.0",
   "private": true,
-  "description": "Custodial instant swap that routes through DEXes (THORChain, NEAR Intents) with an XMR inventory leg",
+  "description": "hypurswap: custodial instant swap routed through DEXes (THORChain, NEAR Intents) with an XMR inventory leg",
   "license": "GPL-3.0-only",
   "type": "module",
   "engines": {

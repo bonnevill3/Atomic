@@ -6,6 +6,8 @@ import type { AssetId, ChainId } from "./assets";
 export type OrderStatus =
   | "awaiting_deposit" // waiting for the user's deposit
   | "confirming" // deposit seen, waiting for confirmations
+  | "awaiting_approval" // above MANUAL_REVIEW_USD: deposit confirmed, operator must approve or refund
+  | "approved" // operator approved; engine executes on the next tick
   | "executing" // write-ahead marker: a send is in progress (never auto-retried)
   | "dex_pending" // forwarded to the DEX, waiting for its payout
   | "completed"

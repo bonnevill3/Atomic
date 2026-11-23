@@ -22,7 +22,7 @@ De BTC/ETH-kant lockt dus altijd eerst (zie [02-protocol.md](02-protocol.md)).
 |---|---|---|
 | `README.md` | fork-melding bovenaan | GPL: wijzigingen duidelijk vermelden |
 | `plan/` | nieuw: onderzoek, protocol, stappenplan, beveiliging | eigen documentatie |
-| `instant-swap/` | nieuw: custodial DEX-routed swap service (TypeScript, los van de Rust-workspace) | eigen project |
+| `hypurswap/` | nieuw: custodial DEX-routed swap service (TypeScript, los van de Rust-workspace) | eigen project |
 | `.github/workflows/preview-release.yml` | `if: github.repository == 'eigenwallet/core'` | de dagelijkse geplande release-job zou anders elke dag in deze fork draaien (en falen zonder upstream-secrets) |
 
 Houd deze tabel bij bij elke wijziging aan upstream-bestanden. Zo blijven toekomstige merges overzichtelijk.

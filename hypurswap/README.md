@@ -1,6 +1,6 @@
-# instant-swap
+# hypurswap
 
-A **custodial instant swap** in the style of wagyu.xyz, but without relaying orders to ChangeNOW or a similar exchange API. Routes run **through DEXes** (THORChain, NEAR Intents), and an **XMR inventory leg** fills the gap where no DEX supports Monero.
+**hypurswap** is a **custodial instant swap** in the style of wagyu.xyz, but without relaying orders to ChangeNOW or a similar exchange API. Routes run **through DEXes** (THORChain, NEAR Intents), and an **XMR inventory leg** fills the gap where no DEX supports Monero.
 
 > **Status: prototype.** Tested with mock chains, live DEX quotes, and live read-only chain access. Nothing has been broadcast on mainnet yet.
 >
@@ -26,6 +26,16 @@ user ──▶ one-time deposit address (our hot wallet, per order)
 
 The router asks every route for a quote and picks the one with the **highest output**.
 
+### Safety net: manual review above $500
+When a deposit is confirmed and has passed screening, hypurswap values it in USD (oracle price at that moment).
+If it is worth **more than `MANUAL_REVIEW_USD` (default $500)**:
+- The order goes to `awaiting_approval`, and **nothing is sent** until an operator acts.
+- The UI warns about this on the quote, and the user sees "manual review" as the status.
+- `POST /admin/orders/:id/approve` releases the order. It is still re-quoted and rate-checked, so a late approval after a big price move becomes a refund.
+- `POST /admin/orders/:id/refund` refunds it instead.
+- If the deposit changes after approval (e.g. the user sends more), the approval is void and the order goes back to review.
+- If the price oracle is unavailable, the order is held. It is never waved through.
+
 ### Why the XMR leg uses inventory
 These are the decentralized XMR venues as of 23 Nov 2026:
 
@@ -38,17 +48,25 @@ These are the decentralized XMR venues as of 23 Nov 2026:
 
 So XMR is paid from your own inventory, priced from an oracle: the median of Kraken and CoinGecko. Quotes are refused if the two sources disagree. The THORChain provider **switches XMR on automatically** once an `XMR.XMR` pool is `Available`. Until then, rebalance inventory by hand or through the eigenwallet fork in this repo (see [Next steps](#next-steps)).
 
-### Live quote check (23 Nov 2026, mock chains)
-| Pair | Route picked |
-|---|---|
-| BTC → XMR, XMR → BTC, XMR → ETH | inventory |
-| ETH → USDC | thorchain |
-| ETH → BTC, BTC → ETH, ETH → SOL, BTC → ZEC | near (THORChain BTC trading was halted at the time) |
-| XMR → SOL, XMR → USDC | inventory → near |
+### Routes with a live quote (re-checked 23 Nov 2026, ~$100 per pair)
+These are **quotes**, run with mock chains and dry-run. Nothing has been sent on mainnet.
+
+| From \ To | BTC | ETH | USDC | XMR | SOL | ZEC |
+|---|---|---|---|---|---|---|
+| **BTC** | | near | near | inventory | near | near |
+| **ETH** | near | | thorchain (alt: near) | inventory | near | near (alt: thorchain) |
+| **XMR** | inventory | inventory | inventory → thorchain | | inventory → near | inventory → near |
+
+At the time of the check:
+- THORChain had **BTC and BASE halted**, so BTC legs ran via NEAR.
+- THORChain had **no XMR pool**, and NEAR Intents (232 tokens) does not list XMR.
+- All XMR legs therefore use inventory.
+
+Deposits are possible in **BTC, ETH and XMR**. USDC, SOL and ZEC are payout-only (the DEX pays the user).
 
 ## Quick start (development, no funds)
 ```bash
-cd instant-swap
+cd hypurswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
@@ -79,6 +97,7 @@ For real configs copy `.env.example` to `.env` and run `npm start`.
 ### Order lifecycle
 ```
 awaiting_deposit → confirming → executing → completed                      (inventory)
+                   confirming → awaiting_approval → approved → executing …  (> MANUAL_REVIEW_USD)
                               → executing → dex_pending → completed        (dex)
                                                        ↘ refund_pending → refunding → refunded
 awaiting_deposit → expired
@@ -92,8 +111,9 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
 ### Admin API (`Authorization: Bearer $ADMIN_TOKEN`)
 | Endpoint | Purpose |
 |---|---|
-| `GET /admin/orders`, `GET /admin/inventory` | overview |
-| `POST /admin/orders/:id/refund` | refund (awaiting / confirming / needs_review / expired) |
+| `GET /admin/orders[?status=awaiting_approval]`, `GET /admin/inventory` | overview, review queue |
+| `POST /admin/orders/:id/approve` | release an order above the review threshold |
+| `POST /admin/orders/:id/refund` | refund (awaiting / confirming / awaiting_approval / needs_review / expired) |
 | `POST /admin/orders/:id/retry` | re-execute a `needs_review` order. **Only** after verifying nothing was broadcast. |
 | `POST /admin/orders/:id/resolve` `{status, txid}` | record a manual payout or refund |
 | `POST /admin/mock/deposit` `{orderId}` | mock mode only |
@@ -108,7 +128,7 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
 4. **Fund inventory** (XMR, plus BTC/ETH for XMR → BTC/ETH payouts) and set `MAX_ORDER_USD` below your float.
 5. **Dry run on live chains.** Use `CHAINS=live DRY_RUN=true` and check the logs for what *would* be broadcast.
 6. **Small live amounts.** Set `DRY_RUN=false` with `MAX_ORDER_USD` small. Do every route at least once, plus a refund.
-7. **Monitor.** Watch the `needs_review` queue, inventory levels and DEX halts (THORChain halts chains regularly).
+7. **Monitor.** Watch the `awaiting_approval` and `needs_review` queues, inventory levels and DEX halts (THORChain halts chains regularly). Large orders sit still until someone approves them.
 
 ## Security
 Lessons taken from Wagyu's incidents (see `../plan/05-wagyu-analysis.md`):

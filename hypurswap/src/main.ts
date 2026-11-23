@@ -24,14 +24,14 @@ async function main() {
   if (cfg.NETWORK === "mainnet" && cfg.ENABLE_NEAR) dexes.near = new NearIntentsProvider(cfg.NEAR_1CLICK_URL, cfg.SLIPPAGE_BPS, cfg.NEAR_1CLICK_JWT);
 
   const router = new Router(cfg, oracle, Object.values(dexes), wallets);
-  const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE));
-  const app = await buildServer(cfg, db, router, wallets);
+  const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE), oracle);
+  const app = await buildServer(cfg, db, router, wallets, oracle);
 
   await app.listen({ port: cfg.PORT, host: cfg.HOST });
   engine.start();
-  log.info("instant-swap started", {
+  log.info("hypurswap started", {
     url: `http://${cfg.HOST}:${cfg.PORT}`, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN,
-    dexes: Object.keys(dexes), admin: !!cfg.ADMIN_TOKEN,
+    dexes: Object.keys(dexes), admin: !!cfg.ADMIN_TOKEN, manualReviewUsd: cfg.MANUAL_REVIEW_USD,
   });
   if (cfg.CHAINS === "live" && !cfg.DRY_RUN) log.warn("LIVE MODE: real funds will be moved");
 

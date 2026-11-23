@@ -79,11 +79,14 @@ async function getQuote() {
     $("q-fee").textContent = `${fmt(b.serviceFee)} ${from}`;
     $("q-eta").textContent = eta(b.etaSeconds);
     $("quote").hidden = false;
+    $("q-review").textContent = `Orders above $${state.health.manualReviewUsd} are checked by hand after your deposit confirms, before the swap runs. This can add some time.`;
+    $("q-review").hidden = !b.manualReview;
     state.lastQuote = b;
   } catch (e) {
     if (seq !== state.quoteSeq) return;
     $("out").textContent = "—";
     $("quote").hidden = true;
+    $("q-review").hidden = true;
     $("quote-error").textContent = e.message;
     $("quote-error").hidden = false;
     state.lastQuote = null;
@@ -119,10 +122,11 @@ async function createOrder() {
 }
 
 // ---------------------------------------------------------------- order view
-const STEP_INDEX = { awaiting_deposit: 0, confirming: 1, processing: 2, completed: 3 };
+const STEP_INDEX = { awaiting_deposit: 0, confirming: 1, manual_review: 2, processing: 2, completed: 3 };
 const STATUS_TEXT = {
   awaiting_deposit: ["Waiting for your deposit.", ""],
   confirming: ["Deposit received, waiting for confirmations.", ""],
+  manual_review: ["Deposit confirmed. Large orders are checked by hand before the swap runs; we will execute or refund it.", "warn"],
   processing: ["Swapping your funds.", ""],
   completed: ["Completed. Funds sent to your address.", "ok"],
   refunding: ["Refunding to your refund address.", "warn"],

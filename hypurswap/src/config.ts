@@ -8,7 +8,7 @@ const bool = z
 const schema = z.object({
   PORT: z.coerce.number().int().default(8080),
   HOST: z.string().default("127.0.0.1"),
-  DB_PATH: z.string().default("./data/instant-swap.db"),
+  DB_PATH: z.string().default("./data/hypurswap.db"),
 
   /** mainnet: real chains + DEX routes. testnet: BTC testnet4 / Sepolia / XMR stagenet, inventory routes only. */
   NETWORK: z.enum(["mainnet", "testnet"]).default("mainnet"),
@@ -50,6 +50,8 @@ const schema = z.object({
 
   ORDER_TTL_MINUTES: z.coerce.number().int().min(5).default(60),
   MIN_ORDER_USD: z.coerce.number().default(20),
+  /** Safety net: orders worth more than this (USD, at deposit confirmation) wait for operator approval. */
+  MANUAL_REVIEW_USD: z.coerce.number().min(0).default(500),
   MAX_ORDER_USD: z.coerce.number().default(5000),
   /** Completed/refunded/expired orders are deleted after this many days (privacy). */
   RETENTION_DAYS: z.coerce.number().int().min(0).default(7),

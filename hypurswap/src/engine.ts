@@ -3,6 +3,8 @@ import type { Wallets } from "./chains/types";
 import type { Config } from "./config";
 import type { Db, OrderRow, OrderStatus } from "./db";
 import { log } from "./log";
+import { usdValue } from "./money";
+import type { PriceOracle } from "./oracle";
 import type { DexName, DexProvider, DexRef } from "./providers/types";
 import type { RoutePlan, Router } from "./router";
 import type { Screening } from "./screening";
@@ -32,6 +34,7 @@ export class Engine {
     private wallets: Wallets,
     private dexes: Partial<Record<DexName, DexProvider>>,
     private screening: Screening,
+    private oracle: PriceOracle,
   ) {}
 
   start(): void {
@@ -74,11 +77,14 @@ export class Engine {
         // Only reachable after a crash during a send: never resend automatically.
         this.review(o, o.status, `interrupted while ${o.status}; verify on-chain before retrying`);
         return;
+      case "approved":
+        return this.executeApproved(o);
       case "dex_pending":
         return this.checkDex(o);
       case "refund_pending":
         return this.refund(o);
       default:
+        // awaiting_approval and needs_review wait for the operator (admin API).
         return;
     }
   }
@@ -124,31 +130,58 @@ export class Engine {
       return;
     }
 
+    // Safety net: large orders wait for an operator before anything is executed.
+    const from = getAsset(o.from_asset)!;
+    const usd = usdValue(d.confirmed, from, (await this.oracle.price(from)).usd);
+    if (usd > this.cfg.MANUAL_REVIEW_USD) {
+      if (this.db.transition(o.id, "confirming", {
+        status: "awaiting_approval", received_amount: d.confirmed.toString(), deposit_txids: JSON.stringify(d.txids),
+        error: `manual review: ~$${Math.round(usd)} > $${this.cfg.MANUAL_REVIEW_USD}`,
+      })) log.warn("order awaiting manual approval", { order: o.id, usd: Math.round(usd) });
+      return;
+    }
+
+    await this.planAndExecute(o, "confirming", d.confirmed);
+  }
+
+  /** Approved by the operator: execute the approved amount, unless the deposit changed since. */
+  private async executeApproved(o: OrderRow): Promise<void> {
+    const d = await this.wallets[o.deposit_chain]!.getDeposit(o.deposit_address, o.deposit_index);
+    const approved = BigInt(o.received_amount!);
+    if (d.confirmed !== approved || d.seen !== d.confirmed) {
+      // More (or less) arrived after approval: run the normal flow again, which re-checks the threshold.
+      this.db.transition(o.id, "approved", { status: "confirming", error: "deposit changed after approval" });
+      return;
+    }
+    await this.planAndExecute(o, "approved", approved);
+  }
+
+  private async planAndExecute(o: OrderRow, current: "confirming" | "approved", amount: bigint): Promise<void> {
     const from = getAsset(o.from_asset)!;
     const to = getAsset(o.to_asset)!;
     let plan: RoutePlan;
     try {
       plan = await this.router.best({
-        from, to, amountIn: d.confirmed, recipient: o.recipient, refundTo: o.deposit_address, dry: false,
+        from, to, amountIn: amount, recipient: o.recipient, refundTo: o.deposit_address, dry: false,
       });
     } catch (e) {
-      this.db.transition(o.id, "confirming", { status: "refund_pending", error: `no route at execution: ${String((e as Error).message)}` });
+      this.db.transition(o.id, current, { status: "refund_pending", error: `no route at execution: ${String((e as Error).message)}` });
       return;
     }
 
     // Rate protection: compare the new rate with the one the user accepted.
     const quotedIn = BigInt(o.amount_in);
     const quotedOut = BigInt(o.quoted_out);
-    const floor = (quotedOut * d.confirmed * BigInt(10_000 - this.cfg.MAX_RATE_DRIFT_BPS)) / (quotedIn * 10_000n);
+    const floor = (quotedOut * amount * BigInt(10_000 - this.cfg.MAX_RATE_DRIFT_BPS)) / (quotedIn * 10_000n);
     if (plan.amountOut < floor) {
-      this.db.transition(o.id, "confirming", { status: "refund_pending", error: "rate moved beyond tolerance" });
+      this.db.transition(o.id, current, { status: "refund_pending", error: "rate moved beyond tolerance" });
       return;
     }
-    if (plan.dex?.expiry && plan.dex.expiry * 1000 < now + 60_000) return; // stale instructions, retry next tick
+    if (plan.dex?.expiry && plan.dex.expiry * 1000 < Date.now() + 60_000) return; // stale instructions, retry next tick
 
-    if (!this.db.transition(o.id, "confirming", {
+    if (!this.db.transition(o.id, current, {
       status: "executing", route_kind: plan.kind, provider: plan.label, amount_out: plan.amountOut.toString(),
-      received_amount: d.confirmed.toString(),
+      received_amount: amount.toString(),
     })) return;
 
     try {

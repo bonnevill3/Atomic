@@ -28,7 +28,7 @@ function build(denylist?: string) {
   const env = setup();
   const dex = new FakeDex(20); // 1 ETH = 20 SOL
   const router = new Router(env.cfg, env.oracle, [dex], env.wallets);
-  const engine = new Engine(env.cfg, env.db, router, env.wallets, { near: dex }, new DenylistScreening(denylist));
+  const engine = new Engine(env.cfg, env.db, router, env.wallets, { near: dex }, new DenylistScreening(denylist), env.oracle);
   const run = async (n = 3) => {
     for (let i = 0; i < n; i++) await engine.tick();
   };
