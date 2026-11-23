@@ -1,0 +1,99 @@
+use crate::network::rendezvous::XmrBtcNamespace;
+use crate::network::swap_setup::bob;
+use crate::network::wormhole;
+use crate::network::{
+    cooperative_xmr_redeem_after_punish, encrypted_signature, quote, quotes_cached, redial,
+    rendezvous, transfer_proof,
+};
+use anyhow::Result;
+use bitcoin_wallet::BitcoinWallet;
+use libp2p::swarm::NetworkBehaviour;
+use libp2p::{PeerId, identify, identity, ping, relay};
+use std::sync::Arc;
+use std::time::Duration;
+use swap_env::env;
+use swap_p2p::observe;
+pub use swap_p2p::out_event::bob::OutEvent;
+
+const PROTOCOL_VERSION: &str = "/comit/xmr/btc/1.0.0";
+
+const INITIAL_REDIAL_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_REDIAL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// A `NetworkBehaviour` that represents an XMR/BTC swap node as Bob.
+#[derive(NetworkBehaviour)]
+#[behaviour(to_swarm = "OutEvent")]
+#[allow(missing_debug_implementations)]
+pub struct Behaviour {
+    /// Enables outbound connections through circuit relays.
+    relay: relay::client::Behaviour,
+
+    /// Fetch a quote from a specific peer, usually before starting a swap
+    pub direct_quote: quote::Behaviour,
+    /// Periodically request quotes from any peers that might offer them
+    pub quotes: quotes_cached::Behaviour,
+    /// Periodically discover peers via rendezvous nodes
+    pub discovery: rendezvous::discovery::Behaviour,
+    /// Observes connection status and emits events
+    pub observe: observe::Behaviour,
+
+    /// Requires to actually do swaps
+    pub swap_setup: bob::Behaviour,
+    pub transfer_proof: transfer_proof::Behaviour,
+    pub cooperative_xmr_redeem: cooperative_xmr_redeem_after_punish::Behaviour,
+    pub encrypted_signature: encrypted_signature::Behaviour,
+
+    /// Alice can give out wormhole addresses to Bob
+    wormhole: wormhole::bob::Behaviour,
+
+    /// Allows us to keep connections to specific peers alive
+    pub redial: redial::Behaviour,
+
+    /// Ping behaviour that ensures that the underlying network connection is
+    /// still alive. If the ping fails a connection close event will be
+    /// emitted that is picked up as swarm event.
+    ping: ping::Behaviour,
+}
+
+impl Behaviour {
+    pub fn new(
+        env_config: env::Config,
+        bitcoin_wallet: Arc<dyn BitcoinWallet>,
+        identity: identity::Keypair,
+        relay: relay::client::Behaviour,
+        namespace: XmrBtcNamespace,
+        rendezvous_nodes: Vec<PeerId>,
+        wormhole_store: Arc<dyn wormhole::WormholeStore + Send + Sync>,
+    ) -> Self {
+        let identifyConfig = identify::Config::new(PROTOCOL_VERSION.to_string(), identity.public())
+            .with_agent_version(agent_version(namespace));
+
+        let pingConfig = ping::Config::new().with_timeout(Duration::from_secs(60));
+
+        Self {
+            relay,
+            direct_quote: quote::bob(),
+            quotes: quotes_cached::Behaviour::new(identifyConfig),
+
+            discovery: rendezvous::discovery::Behaviour::new(
+                identity,
+                rendezvous_nodes,
+                namespace.into(),
+            ),
+            observe: observe::Behaviour::new(),
+
+            swap_setup: bob::Behaviour::new(env_config, bitcoin_wallet),
+            transfer_proof: transfer_proof::bob(),
+            encrypted_signature: encrypted_signature::bob(),
+            cooperative_xmr_redeem: cooperative_xmr_redeem_after_punish::bob(),
+
+            wormhole: wormhole::bob::Behaviour::new(wormhole_store),
+            redial: redial::Behaviour::new("makers", INITIAL_REDIAL_INTERVAL, MAX_REDIAL_INTERVAL),
+            ping: ping::Behaviour::new(pingConfig),
+        }
+    }
+}
+
+fn agent_version(namespace: XmrBtcNamespace) -> String {
+    format!("cli/{} ({})", env!("CARGO_PKG_VERSION"), namespace)
+}

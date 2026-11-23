@@ -1,0 +1,25 @@
+[package]
+name = "swap-controller"
+version = "5.0.4"
+edition = "2024"
+
+[[bin]]
+name = "asb-controller"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+bitcoin = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+comfy-table = "7.2.1"
+dialoguer = { workspace = true }
+jsonrpsee = { workspace = true, features = ["client-core", "http-client"] }
+monero-oxide-ext = { path = "../monero-oxide-ext" }
+rustyline = "17.0.0"
+shell-words = "1.1"
+swap-controller-api = { path = "../swap-controller-api" }
+tokio = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[lints]
+workspace = true

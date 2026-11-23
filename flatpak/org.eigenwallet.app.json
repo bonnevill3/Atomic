@@ -1,0 +1,47 @@
+{
+  "id": "org.eigenwallet.app",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "50",
+  "sdk": "org.gnome.Sdk//50",
+  "command": "unstoppableswap-gui-rs.flatpak.sh",
+  "finish-args": [
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=dri",
+    "--share=ipc",
+    "--share=network",
+    "--talk-name=org.kde.StatusNotifierWatcher",
+    "--filesystem=xdg-run/tray-icon:create",
+    "--filesystem=~/.local/share/xmr-btc-swap"
+  ],
+  "modules": [
+    {
+      "name": "binary",
+      "buildsystem": "simple",
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://cdn.crabnebula.app/download/unstoppableswap/unstoppableswap-gui-rs/latest/platform/debian-x86_64",
+          "sha256": "f1fdb9dc164ed45e31fbba7209da23fa4cb1d461442c9dd0b6bc763b8bf1bb59",
+          "only-arches": ["x86_64"]
+        },
+        {
+          "type": "file",
+          "path": "flatpak/org.eigenwallet.app.appdata.xml"
+        },
+        {
+          "type": "file",
+          "path": "flatpak/unstoppableswap-gui-rs.flatpak.sh"
+        }
+      ],
+      "build-commands": [
+        "ar -x *.deb",
+        "tar -xf data.tar.gz",
+        "install -Dm755 usr/bin/unstoppableswap-gui-rs -t /app/bin",
+        "install -Dm755 *.flatpak.sh                   -t /app/bin",
+        "install -Dm644 *.appdata.xml                  -t /app/share/metainfo",
+        "mv             usr/share/icons                   /app/share"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+import { getLogsOfSwap, saveLogFiles } from "renderer/rpc";
+import PromiseInvokeButton from "renderer/components/PromiseInvokeButton";
+import { store } from "renderer/store/storeRenderer";
+import { ButtonProps } from "@mui/material";
+import { logsToRawString } from "utils/parseUtils";
+
+interface ExportLogsButtonProps extends ButtonProps {
+  swap_id: string;
+}
+
+export default function ExportLogsButton({
+  swap_id,
+  ...buttonProps
+}: ExportLogsButtonProps) {
+  async function handleExportLogs() {
+    const swapLogs = await getLogsOfSwap(swap_id, false);
+    const hashedDaemonLogs = store.getState().logs?.state.logs ?? [];
+    const daemonLogs = hashedDaemonLogs.map((h) => h.log);
+
+    const logContent = {
+      swap_logs: logsToRawString(swapLogs.logs),
+      daemon_logs: logsToRawString(daemonLogs),
+    };
+
+    await saveLogFiles(`swap_${swap_id}_logs.zip`, logContent);
+  }
+
+  return (
+    <PromiseInvokeButton onInvoke={handleExportLogs} {...buttonProps}>
+      Export Logs
+    </PromiseInvokeButton>
+  );
+}

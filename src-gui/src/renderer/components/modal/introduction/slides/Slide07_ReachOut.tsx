@@ -1,0 +1,38 @@
+import { Box, Typography } from "@mui/material";
+import SlideTemplate from "./SlideTemplate";
+import imagePath from "assets/groupWithChatbubbles.png";
+import GitHubIcon from "@mui/icons-material/GitHub";
+import MatrixIcon from "renderer/components/icons/MatrixIcon";
+import LinkIconButton from "renderer/components/icons/LinkIconButton";
+import { IntroSlideProps } from "./SlideTypes";
+import DiscordIcon from "renderer/components/icons/DiscordIcon";
+
+export default function Slide02_ChooseAMaker(props: IntroSlideProps) {
+  return (
+    <SlideTemplate
+      title="Reach out"
+      {...props}
+      imagePath={imagePath}
+      customContinueButtonText="Get Started"
+    >
+      <Typography variant="subtitle1">
+        Got questions or suggestions? Join one of our community channels!
+      </Typography>
+      <Box
+        sx={{
+          mt: 3,
+        }}
+      >
+        <LinkIconButton url="https://eigenwallet.org/discord">
+          <DiscordIcon />
+        </LinkIconButton>
+        <LinkIconButton url="https://github.com/eigenwallet/core">
+          <GitHubIcon />
+        </LinkIconButton>
+        <LinkIconButton url="https://matrix.to/#/#unstoppableswap:matrix.org">
+          <MatrixIcon />
+        </LinkIconButton>
+      </Box>
+    </SlideTemplate>
+  );
+}

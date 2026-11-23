@@ -1,0 +1,166 @@
+import {
+  Box,
+  Chip,
+  IconButton,
+  ListItemIcon,
+  Menu,
+  MenuItem,
+  Typography,
+} from "@mui/material";
+import {
+  Send as SendIcon,
+  SwapHoriz as SwapIcon,
+  Restore as RestoreIcon,
+  MoreHoriz as MoreHorizIcon,
+  FormatListBulleted as ListIcon,
+  LockOutline as LockOutlineIcon,
+  Key as KeyIcon,
+} from "@mui/icons-material";
+import { useState } from "react";
+import { getMoneroSeedAndRestoreHeight } from "renderer/rpc";
+import SendTransactionModal from "../SendTransactionModal";
+import SubaddressesModal from "../SubaddressesModal";
+import { useNavigate } from "react-router-dom";
+import SetRestoreHeightModal from "../SetRestoreHeightModal";
+import SetPasswordModal from "../SetPasswordModal";
+import SeedPhraseModal from "../SeedPhraseModal";
+import {
+  GetMoneroSeedResponse,
+  GetRestoreHeightResponse,
+} from "models/tauriModel";
+import AsyncActionButton from "renderer/components/AsyncActionButton";
+
+interface WalletActionButtonsProps {
+  balance: {
+    unlocked_balance: string;
+  };
+}
+
+export default function WalletActionButtons({
+  balance,
+}: WalletActionButtonsProps) {
+  const navigate = useNavigate();
+
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [restoreHeightDialogOpen, setRestoreHeightDialogOpen] = useState(false);
+  const [subaddressesDialogOpen, setSubaddressesDialogOpen] = useState(false);
+  const [setPasswordDialogOpen, setSetPasswordDialogOpen] = useState(false);
+  const [seedPhrase, setSeedPhrase] = useState<
+    [GetMoneroSeedResponse, GetRestoreHeightResponse] | null
+  >(null);
+
+  const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
+  const menuOpen = Boolean(menuAnchorEl);
+
+  const handleMenuClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    setMenuAnchorEl(event.currentTarget);
+  };
+  const handleMenuClose = () => {
+    setMenuAnchorEl(null);
+  };
+
+  return (
+    <>
+      <SetRestoreHeightModal
+        open={restoreHeightDialogOpen}
+        onClose={() => setRestoreHeightDialogOpen(false)}
+      />
+      <SetPasswordModal
+        open={setPasswordDialogOpen}
+        onClose={() => setSetPasswordDialogOpen(false)}
+      />
+      <SeedPhraseModal onClose={() => setSeedPhrase(null)} seed={seedPhrase} />
+      <SendTransactionModal
+        balance={balance}
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+      />
+      <SubaddressesModal
+        open={subaddressesDialogOpen}
+        onClose={() => setSubaddressesDialogOpen(false)}
+      />
+      <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 1,
+            alignItems: "center",
+          }}
+        >
+          <Chip
+            icon={<SendIcon />}
+            label="Send"
+            variant="button"
+            clickable
+            onClick={() => setSendDialogOpen(true)}
+          />
+          <Chip
+            onClick={() => navigate("/swap")}
+            icon={<SwapIcon />}
+            label="Swap"
+            variant="button"
+            clickable
+          />
+          <Chip
+            onClick={() => setSubaddressesDialogOpen(true)}
+            icon={<ListIcon />}
+            label="Subaddresses"
+            variant="button"
+            clickable
+          />
+        </Box>
+        <Box>
+          <IconButton onClick={handleMenuClick}>
+            <MoreHorizIcon />
+          </IconButton>
+          <Menu
+            anchorEl={menuAnchorEl}
+            open={menuOpen}
+            onClose={handleMenuClose}
+          >
+            <MenuItem
+              onClick={() => {
+                setRestoreHeightDialogOpen(true);
+                handleMenuClose();
+              }}
+            >
+              <ListItemIcon>
+                <RestoreIcon />
+              </ListItemIcon>
+              <Typography>Restore Height</Typography>
+            </MenuItem>
+            <AsyncActionButton content={(state, startAction) =>
+              <MenuItem
+                onClick={() => {
+                  if (state.isLoading) { return; }
+
+                  startAction(async () => {
+                    const [seedPhrase, restoreHeight] = await getMoneroSeedAndRestoreHeight();
+                    setSeedPhrase([seedPhrase, restoreHeight]);
+                    handleMenuClose();
+                  })
+                }}>
+                <ListItemIcon>
+                  <KeyIcon />
+                </ListItemIcon>
+                <Typography>Seedphrase</Typography>
+              </MenuItem>
+            } />
+            <MenuItem
+              onClick={() => {
+                setSetPasswordDialogOpen(true);
+                handleMenuClose();
+              }}
+            >
+              <ListItemIcon>
+                <LockOutlineIcon />
+              </ListItemIcon>
+              <Typography>Change Password</Typography>
+            </MenuItem>
+          </Menu>
+        </Box>
+      </Box>
+    </>
+  );
+}

@@ -1,0 +1,268 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use arti_client::TorClient;
+use axum::{
+    Router,
+    routing::{any, get},
+};
+
+use tokio::task::JoinHandle;
+use tor_rtcompat::tokio::TokioRustlsRuntime;
+use tower_http::cors::CorsLayer;
+use tracing::{error, info};
+
+/// Type alias for the Tor client used throughout the crate
+pub type TorClientArc = Arc<TorClient<TokioRustlsRuntime>>;
+
+pub mod config;
+pub mod connection_pool;
+pub mod database;
+pub mod pool;
+pub mod proxy;
+pub mod types;
+
+use config::Config;
+use database::Database;
+use pool::{NodePool, PoolStatus};
+use proxy::{proxy_handler, stats_handler};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub node_pool: Arc<NodePool>,
+    pub tor_client: Option<TorClientArc>,
+    pub connection_pool: crate::connection_pool::ConnectionPool,
+}
+
+/// Manages background tasks for the RPC pool
+pub struct PoolHandle {
+    pub status_update_handle: JoinHandle<()>,
+    pub server_info: ServerInfo,
+}
+
+impl PoolHandle {
+    /// Get the current server info for the pool
+    pub fn server_info(&self) -> &ServerInfo {
+        &self.server_info
+    }
+}
+
+impl Drop for PoolHandle {
+    fn drop(&mut self) {
+        self.status_update_handle.abort();
+    }
+}
+
+/// Information about a running RPC pool server
+#[derive(Debug, Clone)]
+pub struct ServerInfo {
+    pub port: u16,
+    pub host: String,
+}
+
+impl From<ServerInfo> for String {
+    fn from(val: ServerInfo) -> String {
+        format!("http://{host}:{port}", host = val.host, port = val.port)
+    }
+}
+
+pub async fn create_app_with_receiver(
+    config: Config,
+) -> Result<(
+    Router,
+    tokio::sync::broadcast::Receiver<PoolStatus>,
+    PoolHandle,
+)> {
+    // Initialize database
+    let db = Database::new(config.data_dir.clone()).await?;
+
+    // Initialize node pool with network from config
+    let (node_pool, status_receiver) = NodePool::new(db.clone(), config.network);
+    let node_pool = Arc::new(node_pool);
+
+    // Publish initial status immediately to ensure first event is sent
+    if let Err(e) = node_pool.publish_status_update().await {
+        error!("Failed to publish initial status update: {}", e);
+    }
+
+    // Send status updates every 10 seconds
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    let node_pool_for_health_check = node_pool.clone();
+    let status_update_handle = tokio::spawn(async move {
+        loop {
+            if let Err(e) = node_pool_for_health_check.publish_status_update().await {
+                error!("Failed to publish status update: {}", e);
+            }
+
+            interval.tick().await;
+        }
+    });
+
+    let pool_handle = PoolHandle {
+        status_update_handle,
+        server_info: ServerInfo {
+            port: config.port,
+            host: config.host.clone(),
+        },
+    };
+
+    let app_state = AppState {
+        node_pool,
+        tor_client: config.tor_client,
+        connection_pool: crate::connection_pool::ConnectionPool::new(),
+    };
+
+    // Build the app
+    let app = Router::new()
+        .route("/stats", get(stats_handler))
+        .route("/{*path}", any(proxy_handler))
+        .layer(CorsLayer::permissive())
+        .with_state(app_state);
+
+    Ok((app, status_receiver, pool_handle))
+}
+
+pub async fn create_app(config: Config) -> Result<Router> {
+    let (app, _, _pool_handle) = create_app_with_receiver(config).await?;
+    Ok(app)
+}
+
+pub async fn run_server(config: Config) -> Result<()> {
+    let app = create_app(config.clone()).await?;
+
+    let bind_address = format!("{}:{}", config.host, config.port);
+    info!("Starting server on {}", bind_address);
+
+    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
+    info!("Server listening on {}", bind_address);
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Run a server with a custom data directory
+pub async fn run_server_with_data_dir(config: Config, data_dir: std::path::PathBuf) -> Result<()> {
+    let config_with_data_dir =
+        Config::new_with_port(config.host, config.port, data_dir, config.network);
+    run_server(config_with_data_dir).await
+}
+
+/// Start a server with a random port for library usage
+/// Returns the server info with the actual port used, a receiver for pool status updates, and pool handle
+pub async fn start_server_with_random_port(
+    config: Config,
+) -> Result<(
+    ServerInfo,
+    tokio::sync::broadcast::Receiver<PoolStatus>,
+    PoolHandle,
+)> {
+    let host = config.host.clone();
+    let (app, status_receiver, mut pool_handle) = create_app_with_receiver(config).await?;
+
+    // Bind to port 0 to get a random available port
+    let listener = tokio::net::TcpListener::bind(format!("{host}:0")).await?;
+    let actual_addr = listener.local_addr()?;
+
+    let server_info = ServerInfo {
+        port: actual_addr.port(),
+        host: host.clone(),
+    };
+
+    // Update the pool handle with the actual server info
+    pool_handle.server_info = server_info.clone();
+
+    info!(
+        "Started server on {}:{} (random port)",
+        server_info.host, server_info.port
+    );
+
+    // Start the server in a background task
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            error!("Server error: {}", e);
+        }
+    });
+
+    Ok((server_info, status_receiver, pool_handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use monero_address::Network;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn app_startup_emits_initial_zero_status() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = Config::new_with_port(
+            "127.0.0.1".to_string(),
+            0,
+            dir.path().to_path_buf(),
+            Network::Testnet,
+        );
+
+        let (_app, mut status_receiver, pool_handle) =
+            create_app_with_receiver(config).await.expect("create app");
+
+        let status = status_receiver
+            .try_recv()
+            .expect("initial status published at startup");
+        assert_eq!(status.total_node_count, 0);
+        assert_eq!(status.healthy_node_count, 0);
+        assert_eq!(status.successful_health_checks, 0);
+        assert_eq!(status.unsuccessful_health_checks, 0);
+        assert!(status.top_reliable_nodes.is_empty());
+
+        assert_eq!(pool_handle.server_info().port, 0);
+        assert_eq!(pool_handle.server_info().host, "127.0.0.1");
+
+        assert_eq!(
+            String::from(ServerInfo {
+                port: 1234,
+                host: "node.example".to_string(),
+            }),
+            "http://node.example:1234"
+        );
+    }
+
+    #[tokio::test]
+    async fn random_port_server_answers_stats_over_tcp() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = Config::new_random_port(dir.path().to_path_buf(), Network::Testnet);
+
+        let (server_info, _status_receiver, _pool_handle) = start_server_with_random_port(config)
+            .await
+            .expect("start server on random port");
+
+        assert_ne!(server_info.port, 0);
+
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", server_info.port))
+            .await
+            .expect("connect to the started server");
+
+        let request = format!(
+            "GET /stats HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            server_info.host
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("send stats request");
+
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .expect("read stats response");
+        let response = String::from_utf8_lossy(&response);
+
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "unexpected status line: {response}"
+        );
+        assert!(response.contains("total_node_count"));
+        assert!(response.contains("healthy_node_count"));
+        assert!(response.contains("top_reliable_nodes"));
+    }
+}

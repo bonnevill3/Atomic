@@ -1,0 +1,55 @@
+use crate::protocol::Database;
+use crate::protocol::alice::AliceState;
+use anyhow::{Result, bail};
+use std::convert::TryInto;
+use std::sync::Arc;
+use uuid::Uuid;
+
+pub async fn safely_abort(swap_id: Uuid, db: Arc<dyn Database>) -> Result<AliceState> {
+    let state = db.get_state(swap_id).await?.try_into()?;
+
+    match state {
+        AliceState::Started { .. }
+        | AliceState::BtcLockTransactionSeen { .. }
+        | AliceState::BtcLocked { .. }
+        | AliceState::XmrReadyToLock { .. } => {
+            let state = AliceState::SafelyAborted;
+
+            db.insert_latest_state(swap_id, state.clone().into())
+                .await?;
+
+            Ok(state)
+        }
+
+        AliceState::XmrLockTransactionConstructed { .. }
+        | AliceState::XmrLockTransactionSent { .. }
+        | AliceState::XmrLocked { .. }
+        | AliceState::XmrLockTransferProofSent { .. }
+        | AliceState::EncSigLearned { .. }
+        | AliceState::BtcRedeemTransactionPublished { .. }
+        | AliceState::WaitingForCancelTimelockExpiration { .. }
+        | AliceState::CancelTimelockExpired { .. }
+        | AliceState::BtcCancelled { .. }
+        | AliceState::BtcRefunded { .. }
+        | AliceState::BtcPartiallyRefunded { .. }
+        | AliceState::XmrRefundable { .. }
+        | AliceState::BtcPunishable { .. }
+        | AliceState::BtcRedeemed
+        | AliceState::XmrRefundTxConstructed { .. }
+        | AliceState::XmrRefundTxPublished { .. }
+        | AliceState::XmrRefunded { .. }
+        | AliceState::BtcWithholdPublished { .. }
+        | AliceState::BtcWithholdConfirmed { .. }
+        | AliceState::BtcMercyGranted { .. }
+        | AliceState::BtcMercyPublished { .. }
+        | AliceState::BtcMercyConfirmed { .. }
+        | AliceState::BtcEarlyRefundable { .. }
+        | AliceState::BtcEarlyRefunded(_)
+        | AliceState::BtcPunished { .. }
+        | AliceState::SafelyAborted => bail!(
+            "Cannot safely abort swap {} because it is in state {} which cannot be safely aborted",
+            swap_id,
+            state
+        ),
+    }
+}

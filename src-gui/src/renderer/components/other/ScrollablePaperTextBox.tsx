@@ -1,0 +1,117 @@
+import { Box, Divider, IconButton, Paper, Typography } from "@mui/material";
+import FileCopyOutlinedIcon from "@mui/icons-material/FileCopyOutlined";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { VList, VListHandle } from "virtua";
+import { ExpandableSearchBox } from "./ExpandableSearchBox";
+
+const MIN_HEIGHT = "10rem";
+const NEAR_BOTTOM_THRESHOLD = 3;
+
+export default function ScrollablePaperTextBox({
+  rows,
+  title,
+  copyValue,
+  searchQuery = null,
+  setSearchQuery = null,
+  topRightButton = null,
+  minHeight = MIN_HEIGHT,
+  autoScroll = false,
+}: {
+  rows: ReactNode[];
+  title: string;
+  copyValue: string;
+  searchQuery?: string | null;
+  setSearchQuery?: ((query: string) => void) | null;
+  minHeight?: string;
+  topRightButton?: ReactNode | null;
+  autoScroll?: boolean;
+}) {
+  const virtuaEl = useRef<VListHandle | null>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+
+  function onCopy() {
+    navigator.clipboard.writeText(copyValue);
+  }
+
+  const scrollToBottom = useCallback(() => {
+    virtuaEl.current?.scrollToIndex(rows.length - 1);
+  }, [rows.length]);
+
+  function scrollToTop() {
+    virtuaEl.current?.scrollToIndex(0);
+  }
+
+  function handleRangeChange(startIndex: number, endIndex: number) {
+    // Check if one of the last NEAR_BOTTOM_THRESHOLD elements is visible
+    const lastThreeStart = Math.max(0, rows.length - NEAR_BOTTOM_THRESHOLD);
+    const nearBottom = endIndex >= lastThreeStart;
+    setIsNearBottom(nearBottom);
+  }
+
+  useEffect(() => {
+    if (autoScroll && isNearBottom) {
+      scrollToBottom();
+    }
+  }, [rows.length, autoScroll, isNearBottom, scrollToBottom]);
+
+  return (
+    <Paper
+      variant="outlined"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
+        padding: "0.5rem",
+        width: "100%",
+      }}
+    >
+      <Box
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <Typography>{title}</Typography>
+        {topRightButton}
+      </Box>
+      <Divider />
+      <Box
+        style={{
+          overflow: "auto",
+          whiteSpace: "nowrap",
+          maxHeight: minHeight,
+          minHeight,
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.5rem",
+        }}
+      >
+        <VList
+          ref={virtuaEl}
+          style={{ height: "100vh", width: "100%" }}
+          onRangeChange={handleRangeChange}
+        >
+          {rows}
+        </VList>
+      </Box>
+      <Box style={{ display: "flex", gap: "0.5rem" }}>
+        <IconButton onClick={onCopy} size="small">
+          <FileCopyOutlinedIcon />
+        </IconButton>
+        <IconButton onClick={scrollToTop} size="small">
+          <KeyboardArrowUpIcon />
+        </IconButton>
+        <IconButton onClick={scrollToBottom} size="small">
+          <KeyboardArrowDownIcon />
+        </IconButton>
+        {searchQuery !== null && setSearchQuery !== null && (
+          <ExpandableSearchBox query={searchQuery} setQuery={setSearchQuery} />
+        )}
+      </Box>
+    </Paper>
+  );
+}

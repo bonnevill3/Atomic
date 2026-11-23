@@ -1,0 +1,71 @@
+import {
+  Box,
+  Typography,
+  Paper,
+  Button,
+  Slide,
+  SlideProps,
+} from "@mui/material";
+import CardSelectionGroup from "renderer/components/inputs/CardSelection/CardSelectionGroup";
+import CardSelectionOption from "renderer/components/inputs/CardSelection/CardSelectionOption";
+import SlideTemplate from "./SlideTemplate";
+import imagePath from "assets/currencyFetching.svg";
+import { IntroSlideProps } from "./SlideTypes";
+
+const FiatPricePreferenceSlide = ({
+  handleContinue,
+  handlePrevious,
+  showFiat,
+  onChange,
+}: IntroSlideProps & {
+  showFiat: boolean;
+  onChange: (value: string) => void;
+}) => {
+  return (
+    <SlideTemplate
+      handleContinue={handleContinue}
+      handlePrevious={handlePrevious}
+      title="Fiat Prices"
+      imagePath={imagePath}
+    >
+      <Typography variant="subtitle1" color="textSecondary">
+        Do you want to us to show the current exchange rates for Bitcoin and
+        Monero?
+      </Typography>
+      <CardSelectionGroup
+        value={showFiat ? "show" : "hide"}
+        onChange={onChange}
+      >
+        <CardSelectionOption value="show">
+          <Typography>Show fiat prices</Typography>
+          <Typography
+            variant="caption"
+            color="textSecondary"
+            paragraph
+            style={{ marginBottom: 4 }}
+          >
+            Recommended
+          </Typography>
+        </CardSelectionOption>
+        <CardSelectionOption value="hide">
+          <Typography>Don't show fiat prices</Typography>
+          <Typography
+            variant="caption"
+            color="textSecondary"
+            paragraph
+            style={{ marginBottom: 4 }}
+          >
+            We won't be able to warn you about bad exchange rates.
+          </Typography>
+        </CardSelectionOption>
+      </CardSelectionGroup>
+      <Box style={{ marginTop: "0.5rem" }}>
+        <Typography variant="caption" color="textSecondary">
+          You can always change your preference in the settings.
+        </Typography>
+      </Box>
+    </SlideTemplate>
+  );
+};
+
+export default FiatPricePreferenceSlide;

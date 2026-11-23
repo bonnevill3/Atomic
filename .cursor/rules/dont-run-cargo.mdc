@@ -1,0 +1,11 @@
+---
+description: Don't run cargo clean. Ask the user to confirm.
+globs:
+alwaysApply: true
+---
+
+Only run cargo clean after asking the user. 
+
+If the user says "run cargo clean" then use cargo clean.
+
+The codebase takes a long ass time to compile, that's why.

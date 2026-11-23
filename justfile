@@ -1,0 +1,158 @@
+# Show help for each of the justfile recipes
+help:
+	@just --list
+
+# Build Monero C++ Codebase (currently disabled)
+# build_monero_cpp:
+#	just update_submodules
+#	cd monero-sys/monero && make -j8 release
+
+# Clean the Monero C++ Codebase and build cache
+clean:
+	cargo clean
+	cd monero-sys && rm -rf monero monero_c
+	just update_submodules
+
+# Builds the Rust bindings for Monero
+monero_sys:
+	just update_submodules
+	cd monero-sys && cargo build
+
+undo-monero-changes:
+   cd monero-sys/monero && git restore .
+
+# Test the FFI bindings using various sanitizers, that can detect memory safety issues.
+test-ffi: test-ffi-address
+
+# Tests the FFI bindings using AddressSanitizer (https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#addresssanitizer). Can detect memory safety issues like use-after-free, double-free, leaks, etc.
+test-ffi-address:
+	cd monero-sys && RUSTFLAGS=-Zsanitizer=address cargo +nightly nextest run -Zbuild-std --target=`rustc --version --verbose | grep "host:" | cut -d' ' -f2`
+
+# Start the Tauri app
+tauri:
+	cd src-tauri && RUST_BACKTRACE=1 cargo tauri dev --no-watch -- -vv -- --testnet
+
+tauri-mainnet:
+	cd src-tauri && RUST_BACKTRACE=1 cargo tauri dev --no-watch -- -vv
+
+# Install the GUI dependencies
+gui_install:
+	cd src-gui && yarn install
+
+# Start the GUI Dev Server
+web: gui_install bindings
+	cd src-gui && yarn dev
+
+gui:
+	just web & just tauri
+
+gui-mainnet:
+	just web & just tauri-mainnet
+
+# Build the GUI
+gui_build:
+        cd src-gui && yarn build
+
+build-gui-windows:
+    cargo tauri build --target x86_64-pc-windows-gnu -- -vv
+
+# Run the Rust tests
+tests:
+        cargo nextest run
+
+# List all available docker integration tests
+list-docker-tests:
+	@find swap/tests -maxdepth 1 -type f -name "*.rs" | xargs -n1 basename | sed 's/\.rs$//' | sort
+
+# Run docker tests (e.g., "just docker_test happy_path_alice_developer_tip")
+docker_test test_name:
+	RUST_BACKTRACE=1 cargo test --package swap --test {{test_name}} -- --nocapture
+
+docker_test_happy_path:
+	just docker_test happy_path
+
+docker_test_happy_path_with_developer_tip:
+	just docker_test happy_path_alice_developer_tip
+
+docker_test_refund_path:
+	just docker_test alice_refunds_after_restart_bob_refunded
+
+# Tests the Rust bindings for Monero
+test_monero_sys:
+        cd monero-sys && cargo nextest run
+
+# Builds the ASB and Swap binaries
+swap:
+	cargo build -p swap-asb --bin asb && cd swap && cargo build --bin=swap
+
+# Generate the ASB RPC auth keyfile
+gen-rpc-auth:
+	cargo run -p swap-orchestrator --bin orchestrator -- gen-rpc-auth
+
+# Run the asb on testnet
+asb-testnet:
+	cargo run -p swap-asb --bin asb -- --testnet --trace start --rpc-bind-port 9944 --rpc-bind-host 0.0.0.0 --rpc-auth-file rpc-auth
+
+# Launch the ASB controller REPL against a local testnet ASB instance
+asb-testnet-controller:
+	cargo run -p swap-controller --bin asb-controller -- --url http://127.0.0.1:9944
+
+# Updates our submodules (currently only Monero C++ codebase)
+update_submodules:
+	cd monero-sys && git submodule update --init --recursive --force
+
+# Run clippy checks
+clippy:
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Generate the bindings for the Tauri API
+bindings:
+	cd src-gui && yarn run gen-bindings
+
+# Format the code
+fmt:
+	dprint fmt
+
+generate-sqlx-cache:
+	./dev-scripts/regenerate_sqlx_cache.sh
+
+
+alias eslint := check_gui_eslint
+# Run eslint for the GUI frontend
+check_gui_eslint:
+	cd src-gui && yarn run eslint
+
+alias tsc := check_gui_tsc
+
+# Run the typescript type checker for the GUI frontend
+check_gui_tsc:
+	cd src-gui && yarn run tsc --noEmit
+
+# Check for unused code in the GUI frontend
+check_gui_unused_code:
+	cd src-gui && npx knip
+
+test test_name:
+    cargo test --test {{test_name}} -- --nocapture
+
+# Run the checks for the GUI frontend
+check_gui:
+	just check_gui_eslint || true
+	just check_gui_tsc
+
+# Sometimes you have to prune the docker network to get the integration tests to work
+docker-prune-network:
+	docker network prune -f
+
+# Install dependencies required for building monero-sys
+prepare_mac_os_brew_dependencies:
+	cd dev-scripts && chmod +x ./brew_dependencies_install.sh && ./brew_dependencies_install.sh
+
+# Takes a crate (e.g monero-rpc-pool) and uses code2prompt to copy to clipboard
+# E.g code2prompt . --exclude "*.lock" --exclude ".sqlx/*" --exclude "target"
+code2prompt_single_crate crate:
+	cd {{crate}} && code2prompt . --exclude "*.lock" --exclude ".sqlx/*" --exclude "target"
+
+prepare-windows-build:
+    cd dev-scripts && ./ubuntu_build_x86_86-w64-mingw32-gcc.sh
+

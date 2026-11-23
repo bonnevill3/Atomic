@@ -1,0 +1,39 @@
+[package]
+name = "monero-wallet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Error handling
+anyhow = { workspace = true }
+backoff = { workspace = true }
+
+# Other stuff
+monero-address = { workspace = true }
+monero-oxide-ext = { path = "../monero-oxide-ext" }
+monero-sys = { path = "../monero-sys" }
+swap-core = { path = "../swap-core" }
+throttle = { path = "../throttle" }
+uuid = { workspace = true }
+
+# Tokio
+tokio = { workspace = true, features = ["process", "fs", "net", "parking_lot", "rt"] }
+
+# Tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# monero-oxide
+monero-daemon-rpc = { workspace = true }
+monero-interface = { workspace = true }
+monero-oxide-wallet = { workspace = true }
+monero-simple-request-rpc = { workspace = true }
+monero-wallet-ng = { path = "../monero-wallet-ng" }
+
+# Cryptography
+curve25519-dalek = { workspace = true }
+hex = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

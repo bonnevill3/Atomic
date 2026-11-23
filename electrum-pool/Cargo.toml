@@ -1,0 +1,13 @@
+[package]
+name = "electrum-pool"
+version = "0.1.0"
+authors = ["eigenwallet Team <help@unstoppableswap.net>"]
+edition = "2024"
+
+[dependencies]
+bdk_electrum = { workspace = true, features = ["use-rustls-ring"] }
+bitcoin = { workspace = true }
+futures = { workspace = true }
+once_cell = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
