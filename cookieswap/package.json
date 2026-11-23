@@ -1,8 +1,8 @@
 {
-  "name": "hypurswap",
+  "name": "cookieswap",
   "version": "0.1.0",
   "private": true,
-  "description": "hypurswap: custodial instant swap routed through DEXes (THORChain, NEAR Intents) with an XMR inventory leg",
+  "description": "cookieswap: custodial instant swap routed through DEXes (THORChain, NEAR Intents) with an XMR inventory leg",
   "license": "GPL-3.0-only",
   "type": "module",
   "engines": {

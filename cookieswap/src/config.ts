@@ -8,7 +8,7 @@ const bool = z
 const schema = z.object({
   PORT: z.coerce.number().int().default(8080),
   HOST: z.string().default("127.0.0.1"),
-  DB_PATH: z.string().default("./data/hypurswap.db"),
+  DB_PATH: z.string().default("./data/cookieswap.db"),
 
   /** mainnet: real chains + DEX routes. testnet: BTC testnet4 / Sepolia / XMR stagenet, inventory routes only. */
   NETWORK: z.enum(["mainnet", "testnet"]).default("mainnet"),

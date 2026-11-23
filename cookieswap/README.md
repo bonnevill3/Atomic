@@ -1,6 +1,6 @@
-# hypurswap
+# cookieswap
 
-**hypurswap** is a **custodial instant swap** in the style of wagyu.xyz, but without relaying orders to ChangeNOW or a similar exchange API. Routes run **through DEXes** (THORChain, NEAR Intents), and an **XMR inventory leg** fills the gap where no DEX supports Monero.
+**cookieswap** is a **custodial instant swap** in the style of wagyu.xyz, but without relaying orders to ChangeNOW or a similar exchange API. Routes run **through DEXes** (THORChain, NEAR Intents), and an **XMR inventory leg** fills the gap where no DEX supports Monero.
 
 > **Status: prototype.** Tested with mock chains, live DEX quotes, and live read-only chain access. Nothing has been broadcast on mainnet yet.
 >
@@ -31,7 +31,7 @@ Users can **send USDC or USDT (ERC-20)** and receive BTC, ETH, XMR, SOL, ZEC or 
 - **Deposit addresses:** each order gets its own deposit address from the ETH key tree, shared with ETH orders.
   The UI shows the network and warns that tokens sent on another network cannot be recovered.
   The QR code is an EIP-681 token transfer.
-- **Gas:** a deposit address only holds tokens, so before forwarding, hypurswap **tops up gas from the ETH inventory**.
+- **Gas:** a deposit address only holds tokens, so before forwarding, cookieswap **tops up gas from the ETH inventory**.
   It waits for that top-up to confirm, then sends the tokens.
   The gas (top-up + transfer) is quoted in ETH and charged to the user in token units at the oracle price.
 - **Routes:**
@@ -41,7 +41,7 @@ Users can **send USDC or USDT (ERC-20)** and receive BTC, ETH, XMR, SOL, ZEC or 
   THORChain is still used for payouts *in* USDC/USDT.
 
 ### Safety net: manual review above $500
-When a deposit is confirmed and has passed screening, hypurswap values it in USD (oracle price at that moment).
+When a deposit is confirmed and has passed screening, cookieswap values it in USD (oracle price at that moment).
 If it is worth **more than `MANUAL_REVIEW_USD` (default $500)**:
 - The order goes to `awaiting_approval`, and **nothing is sent** until an operator acts.
 - The UI warns about this on the quote, and the user sees "manual review" as the status.
@@ -82,7 +82,7 @@ Deposits are possible in **BTC, ETH, USDC, USDT (ERC-20) and XMR**. SOL and ZEC 
 
 ## Quick start (development, no funds)
 ```bash
-cd hypurswap
+cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"

@@ -3,7 +3,7 @@
 > **Doel van deze fork:** dezelfde éénrichtings-swap als eigenwallet (de taker koopt XMR en de maker/`asb` verkoopt XMR), uitgebreid met **ETH → XMR** naast BTC → XMR.
 >
 > - Plan, onderzoek en beveiligingschecklist staan in [`plan/`](plan/README.md).
-> - [`hypurswap/`](hypurswap/README.md): **hypurswap**, a custodial instant swap (wagyu.xyz-style) that routes through DEXes (THORChain, NEAR Intents) with an XMR inventory leg. Prototype, TypeScript.
+> - [`cookieswap/`](cookieswap/README.md): **cookieswap**, a custodial instant swap (wagyu.xyz-style) that routes through DEXes (THORChain, NEAR Intents) with an XMR inventory leg. Prototype, TypeScript.
 > - Wijzigingen ten opzichte van upstream staan in [`plan/FORK.md`](plan/FORK.md).
 > - De originele README van eigenwallet staat hieronder ongewijzigd.
 

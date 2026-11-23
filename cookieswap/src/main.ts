@@ -29,7 +29,7 @@ async function main() {
 
   await app.listen({ port: cfg.PORT, host: cfg.HOST });
   engine.start();
-  log.info("hypurswap started", {
+  log.info("cookieswap started", {
     url: `http://${cfg.HOST}:${cfg.PORT}`, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN,
     dexes: Object.keys(dexes), admin: !!cfg.ADMIN_TOKEN, manualReviewUsd: cfg.MANUAL_REVIEW_USD,
   });
