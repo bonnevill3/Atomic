@@ -169,10 +169,12 @@ export class Engine {
       return;
     }
 
-    // Rate protection: compare the new rate with the one the user accepted.
+    // Rate protection: compare the new rate with the one the user accepted, within the slippage they chose.
+    // Orders from before per-order slippage carry no value and keep the operator's tolerance.
+    const driftBps = o.max_drift_bps ?? this.cfg.MAX_RATE_DRIFT_BPS;
     const quotedIn = BigInt(o.amount_in);
     const quotedOut = BigInt(o.quoted_out);
-    const floor = (quotedOut * amount * BigInt(10_000 - this.cfg.MAX_RATE_DRIFT_BPS)) / (quotedIn * 10_000n);
+    const floor = (quotedOut * amount * BigInt(10_000 - driftBps)) / (quotedIn * 10_000n);
     if (plan.amountOut < floor) {
       this.db.transition(o.id, current, { status: "refund_pending", error: "rate moved beyond tolerance" });
       return;

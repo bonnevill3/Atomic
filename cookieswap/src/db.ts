@@ -43,6 +43,8 @@ export interface OrderRow {
   payout_txid: string | null;
   refund_txid: string | null;
   amount_out: string | null;
+  /** Rate tolerance the user chose; null only on orders created before per-order slippage existed. */
+  max_drift_bps: number | null;
   error: string | null;
   created_at: number;
   updated_at: number;
@@ -54,7 +56,7 @@ export type NewOrder = Pick<
   OrderRow,
   | "id" | "token_hash" | "from_asset" | "to_asset" | "amount_in" | "quoted_out" | "route_kind" | "provider"
   | "recipient" | "refund_address" | "deposit_chain" | "deposit_address" | "deposit_index" | "expires_at"
->;
+> & { max_drift_bps: number };
 
 export class Db {
   private db: Database.Database;
@@ -87,6 +89,7 @@ export class Db {
         payout_txid TEXT,
         refund_txid TEXT,
         amount_out TEXT,
+        max_drift_bps INTEGER,
         error TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
@@ -99,6 +102,13 @@ export class Db {
         next_index INTEGER NOT NULL
       );
     `);
+    this.migrate();
+  }
+
+  /** Additive column migrations for databases created by older versions. */
+  private migrate(): void {
+    const cols = new Set((this.db.prepare("PRAGMA table_info(orders)").all() as { name: string }[]).map((c) => c.name));
+    if (!cols.has("max_drift_bps")) this.db.exec("ALTER TABLE orders ADD COLUMN max_drift_bps INTEGER");
   }
 
   /**
@@ -123,9 +133,9 @@ export class Db {
     const now = Date.now();
     this.db
       .prepare(`INSERT INTO orders (id, token_hash, from_asset, to_asset, amount_in, quoted_out, route_kind, provider,
-        recipient, refund_address, deposit_chain, deposit_address, deposit_index, status, created_at, updated_at, expires_at)
+        recipient, refund_address, deposit_chain, deposit_address, deposit_index, max_drift_bps, status, created_at, updated_at, expires_at)
         VALUES (@id, @token_hash, @from_asset, @to_asset, @amount_in, @quoted_out, @route_kind, @provider,
-        @recipient, @refund_address, @deposit_chain, @deposit_address, @deposit_index, 'awaiting_deposit', @now, @now, @expires_at)`)
+        @recipient, @refund_address, @deposit_chain, @deposit_address, @deposit_index, @max_drift_bps, 'awaiting_deposit', @now, @now, @expires_at)`)
       .run({ ...o, now });
     return this.getOrder(o.id)!;
   }

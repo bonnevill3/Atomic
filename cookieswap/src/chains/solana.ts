@@ -1,4 +1,5 @@
 import { createHmac, createPrivateKey, createPublicKey } from "node:crypto";
+import { getTransferSolInstruction } from "@solana-program/system";
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
@@ -31,6 +32,8 @@ import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult, SendSource
 
 /** Two signatures + rent for creating the recipient's token account if it is missing. */
 const FEE_ESTIMATE_LAMPORTS = 2 * 5_000 + 2_039_280;
+/** Native SOL transfer: two signatures (inventory fee payer + deposit owner). */
+const SOL_TRANSFER_FEE_LAMPORTS = 2 * 5_000;
 const CONFIRM_TIMEOUT_MS = 90_000;
 /** PKCS#8 DER prefix for a raw 32-byte Ed25519 private key. */
 const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
@@ -184,25 +187,93 @@ export class SplWallet implements ChainWallet {
 
     const { value: lifetime } = await this.rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
     const { transaction } = await this.buildTransfer(source, payer, req.to, amount, lifetime);
-    const signature = getSignatureFromTransaction(transaction);
-    await this.rpc
-      .sendTransaction(getBase64EncodedWireTransaction(transaction), { encoding: "base64", preflightCommitment: "confirmed" })
-      .send();
-    await this.waitConfirmed(signature, lifetime.lastValidBlockHeight);
+    const signature = await submitAndConfirm(this.rpc, transaction, lifetime.lastValidBlockHeight);
     return { txid: signature, amount, fee: BigInt(FEE_ESTIMATE_LAMPORTS) };
   }
+}
 
-  /** Poll until confirmed; fail on a transaction error or once the blockhash has expired. */
-  private async waitConfirmed(signature: ReturnType<typeof getSignatureFromTransaction>, lastValidBlockHeight: bigint) {
-    const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const { value: [status] } = await this.rpc.getSignatureStatuses([signature]).send();
-      if (status?.err) throw new Error(`solana transfer ${signature} failed: ${JSON.stringify(status.err)}`);
-      if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") return;
-      const height = await this.rpc.getBlockHeight({ commitment: "confirmed" }).send();
-      if (height > lastValidBlockHeight) throw new Error(`solana transfer ${signature} expired before confirmation`);
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-    throw new Error(`solana transfer ${signature} not confirmed after ${CONFIRM_TIMEOUT_MS / 1000}s`);
+type SignedTx = Awaited<ReturnType<typeof signTransactionMessageWithSigners>>;
+
+/** Send a signed transaction and poll until confirmed; fail on a transaction error or once the blockhash has expired. */
+async function submitAndConfirm(rpc: SolanaRpc, transaction: SignedTx, lastValidBlockHeight: bigint): Promise<string> {
+  const signature = getSignatureFromTransaction(transaction);
+  await rpc.sendTransaction(getBase64EncodedWireTransaction(transaction), { encoding: "base64", preflightCommitment: "confirmed" }).send();
+  const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const { value: [status] } = await rpc.getSignatureStatuses([signature]).send();
+    if (status?.err) throw new Error(`solana transfer ${signature} failed: ${JSON.stringify(status.err)}`);
+    if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") return signature;
+    const height = await rpc.getBlockHeight({ commitment: "confirmed" }).send();
+    if (height > lastValidBlockHeight) throw new Error(`solana transfer ${signature} expired before confirmation`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error(`solana transfer ${signature} not confirmed after ${CONFIRM_TIMEOUT_MS / 1000}s`);
+}
+
+/**
+ * Native SOL hot wallet. The inventory account pays the fee, so a deposit can be forwarded in full
+ * (the emptied deposit account simply closes).
+ */
+export class SolWallet implements ChainWallet {
+  readonly chain = "SOL" as const;
+  readonly asset = "SOL" as const;
+
+  constructor(
+    private keys: SolanaKeys,
+    private rpc: SolanaRpc,
+  ) {}
+
+  async depositAddress(index: number) {
+    return { address: this.keys.address({ kind: "deposit", index }), index };
+  }
+
+  async inventoryAddress() {
+    return this.keys.address({ kind: "inventory" });
+  }
+
+  private async lamports(owner: Address, commitment: Commitment): Promise<bigint> {
+    return BigInt((await this.rpc.getBalance(owner, { commitment }).send()).value);
+  }
+
+  async getDeposit(addr: string): Promise<DepositInfo> {
+    const owner = address(addr);
+    const [seen, confirmed] = await Promise.all([this.lamports(owner, "confirmed"), this.lamports(owner, "finalized")]);
+    return { seen, confirmed, txids: [] };
+  }
+
+  async inventoryBalance(): Promise<bigint> {
+    return this.lamports(this.keys.address({ kind: "inventory" }), "finalized");
+  }
+
+  async estimateSendFee(memo: boolean): Promise<Fee> {
+    if (memo) throw new Error("memo transfers are not supported on Solana");
+    return { asset: "SOL", amount: BigInt(SOL_TRANSFER_FEE_LAMPORTS) };
+  }
+
+  /** System transfer from `source` to `to`, fee paid by `payer`. Signed, not sent. */
+  async buildTransfer(source: KeyPairSigner, payer: KeyPairSigner, to: string, amount: bigint, lifetime: Lifetime) {
+    const message = pipe(
+      createTransactionMessage({ version: 0 }),
+      (m) => setTransactionMessageFeePayerSigner(payer, m),
+      (m) => setTransactionMessageLifetimeUsingBlockhash(lifetime, m),
+      (m) => appendTransactionMessageInstructions([getTransferSolInstruction({ source, destination: address(to), amount })], m),
+    );
+    return { message, transaction: await signTransactionMessageWithSigners(message) };
+  }
+
+  async send(req: SendRequest): Promise<SendResult> {
+    if (req.memo) throw new Error("memo transfers are not supported on Solana");
+    const payer = await this.keys.signer({ kind: "inventory" });
+    const source = req.from.kind === "inventory" ? payer : await this.keys.signer(req.from);
+    const balance = await this.lamports(source.address, "confirmed");
+    // The inventory pays its own fee when it is the source, so keep that much back.
+    const reserve = req.from.kind === "inventory" ? BigInt(SOL_TRANSFER_FEE_LAMPORTS) : 0n;
+    const amount = req.amount === "all" ? balance - reserve : req.amount;
+    if (amount <= 0n) throw new Error("nothing to send");
+    if (amount + reserve > balance) throw new Error(`insufficient SOL: have ${balance}, need ${amount + reserve}`);
+    const { value: lifetime } = await this.rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+    const { transaction } = await this.buildTransfer(source, payer, req.to, amount, lifetime);
+    const signature = await submitAndConfirm(this.rpc, transaction, lifetime.lastValidBlockHeight);
+    return { txid: signature, amount, fee: BigInt(SOL_TRANSFER_FEE_LAMPORTS) };
   }
 }

@@ -20,7 +20,7 @@ async function createOrder(env: ReturnType<typeof setup>, router: Router, from: 
     id: randomBytes(8).toString("hex"), token_hash: "x", from_asset: from, to_asset: to,
     amount_in: amountIn.toString(), quoted_out: plan.amountOut.toString(), route_kind: plan.kind, provider: plan.label,
     recipient, refund_address: refund, deposit_chain: ASSETS[from].chain, deposit_address: dep.address,
-    deposit_index: dep.index, expires_at: Date.now() + ttlMs,
+    deposit_index: dep.index, max_drift_bps: env.cfg.MAX_RATE_DRIFT_BPS, expires_at: Date.now() + ttlMs,
   });
 }
 

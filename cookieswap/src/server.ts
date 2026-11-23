@@ -5,7 +5,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import QRCode from "qrcode";
 import { z } from "zod";
-import { ASSETS, type Asset, getAsset, isEvmChain, isValidAddress, keyFamily, NETWORK_CODE, tokenContract } from "./assets";
+import { ASSETS, type Asset, type EvmChainId, getAsset, isEvmChain, isValidAddress, keyFamily, NETWORK_CODE, tokenContract } from "./assets";
 import { MockWallet } from "./chains/mock";
 import type { Wallets } from "./chains/types";
 import type { Config } from "./config";
@@ -20,11 +20,15 @@ import { CONFIRM_SECONDS, type RoutePlan, type Router } from "./router";
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest();
 
+/** Range of the per-order rate tolerance ("slippage") a user may pick in the UI. */
+export const SLIPPAGE_LIMITS_BPS = { min: 10, max: 500 } as const;
+
 const quoteBody = z.object({
   from: z.string(),
   to: z.string(),
   amount: z.string().max(40),
   recipient: z.string().max(256).optional(),
+  slippageBps: z.number().int().min(SLIPPAGE_LIMITS_BPS.min).max(SLIPPAGE_LIMITS_BPS.max).optional(),
 });
 const orderBody = quoteBody.extend({
   recipient: z.string().min(1).max(256),
@@ -54,8 +58,10 @@ export function routeName(label: string): string {
   return label.split(" → ").map((p) => ROUTE_NAMES[p] ?? p).join(" → ");
 }
 
-function quoteView(p: RoutePlan, manualReview: boolean) {
+function quoteView(p: RoutePlan, manualReview: boolean, slippageBps: number) {
   const rate = Number(fromAtomic(p.amountOut, p.to)) / Number(fromAtomic(p.amountIn, p.from));
+  // Worst case: the rate may fall by `slippageBps` before we execute, then the DEX applies its own limit.
+  const guaranteedMin = (p.minAmountOut * BigInt(10_000 - slippageBps)) / 10_000n;
   return {
     manualReview,
     route: p.label,
@@ -66,6 +72,8 @@ function quoteView(p: RoutePlan, manualReview: boolean) {
     amountIn: fromAtomic(p.amountIn, p.from),
     amountOut: fromAtomic(p.amountOut, p.to),
     minAmountOut: fromAtomic(p.minAmountOut, p.to),
+    slippageBps,
+    guaranteedMin: fromAtomic(guaranteedMin, p.to),
     serviceFee: fromAtomic(p.serviceFee, p.from),
     networkFee: fromAtomic(p.forwardFee, p.from),
     rate,
@@ -99,6 +107,7 @@ function orderView(o: OrderRow) {
     recipient: o.recipient,
     route: o.provider,
     routeName: routeName(o.provider),
+    slippageBps: o.max_drift_bps,
     payoutTxid: o.payout_txid,
     refundTxid: o.refund_txid,
     expiresAt: o.expires_at,
@@ -106,7 +115,8 @@ function orderView(o: OrderRow) {
   };
 }
 
-const EVM_CHAIN_ID: Record<string, number> = { ETH: 1, BSC: 56, POL: 137, BASE: 8453, ARB: 42161 };
+/** Mainnet chain ids, used in EIP-681 payment links and by the UI to switch the user's wallet network. */
+const EVM_CHAIN_ID: Record<EvmChainId, number> = { ETH: 1, BSC: 56, POL: 137, BASE: 8453, ARB: 42161, AVAX: 43114 };
 
 export async function buildServer(
   cfg: Config, db: Db, router: Router, wallets: Wallets, oracle: PriceOracle, dexNames: string[],
@@ -141,6 +151,7 @@ export async function buildServer(
       BTC: `${cfg.BTC_CONFIRMATIONS} confirmations`, ETH: `${cfg.ETH_CONFIRMATIONS} confirmations`,
       BSC: `${cfg.BSC_CONFIRMATIONS} confirmations`, POL: `${cfg.POL_CONFIRMATIONS} confirmations`,
       BASE: `${cfg.BASE_CONFIRMATIONS} confirmations`, ARB: `${cfg.ARB_CONFIRMATIONS} confirmations`,
+      AVAX: `${cfg.AVAX_CONFIRMATIONS} confirmations`, LTC: `${cfg.LTC_CONFIRMATIONS} confirmations`,
       XMR: `${cfg.XMR_CONFIRMATIONS} confirmations`, TRON: "solidified block", SOL: "finalized",
     };
     const networks = [...new Map(
@@ -152,6 +163,7 @@ export async function buildServer(
       limits: { minUsd: cfg.MIN_ORDER_USD, maxUsd: cfg.MAX_ORDER_USD, manualReviewUsd: cfg.MANUAL_REVIEW_USD },
       depositWindowMinutes: cfg.ORDER_TTL_MINUTES,
       maxRateDriftBps: cfg.MAX_RATE_DRIFT_BPS,
+      slippage: { defaultBps: cfg.MAX_RATE_DRIFT_BPS, minBps: SLIPPAGE_LIMITS_BPS.min, maxBps: SLIPPAGE_LIMITS_BPS.max },
       retentionDays: cfg.RETENTION_DAYS,
       routes: dexNames.map(routeName),
       networks,
@@ -167,9 +179,17 @@ export async function buildServer(
       id: a.id, symbol: a.symbol, name: a.name, network: a.network, chain: a.chain, decimals: a.decimals,
       token: tokenContract(a, cfg.NETWORK) ?? null,
       code: a.contracts ? NETWORK_CODE[a.chain] : null,
+      rank: a.rank ?? null,
+      stable: a.stable,
+      memoWarning: !!a.memoWarning,
+      evm: isEvmChain(a.chain),
+      evmChainId: isEvmChain(a.chain) && cfg.NETWORK === "mainnet" ? EVM_CHAIN_ID[a.chain] : null,
       canSend: a.depositable && !!wallets[a.id], canReceive: true,
     })),
   );
+
+  /** Indicative USD prices for showing fiat values next to amounts (never used for pricing orders). */
+  app.get("/api/prices", async () => oracle.prices());
 
   app.post("/api/quote", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (req) => {
     const b = quoteBody.parse(req.body);
@@ -184,7 +204,11 @@ export async function buildServer(
     const recipient = b.recipient && isValidAddress(to.chain, b.recipient, cfg.NETWORK) ? b.recipient : undefined;
     const plans = await router.plan({ from, to, amountIn, recipient, dry: true });
     const review = await needsReview(amountIn, from);
-    return { best: quoteView(plans[0], review), alternatives: plans.slice(1).map((p) => quoteView(p, review)) };
+    const slippage = b.slippageBps ?? cfg.MAX_RATE_DRIFT_BPS;
+    return {
+      best: quoteView(plans[0], review, slippage),
+      alternatives: plans.slice(1).map((p) => quoteView(p, review, slippage)),
+    };
   });
 
   app.post("/api/orders", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
@@ -201,6 +225,7 @@ export async function buildServer(
     }
     // Indicative quote with the real recipient (lets the DEX validate the address too).
     const plan = await router.best({ from, to, amountIn, recipient: b.recipient, dry: true });
+    const slippage = b.slippageBps ?? cfg.MAX_RATE_DRIFT_BPS;
 
     const wallet = wallets[from.id]!;
     // Chains on the same key tree (all EVM chains) share one index counter, so no address is reused.
@@ -220,9 +245,10 @@ export async function buildServer(
       deposit_chain: from.chain,
       deposit_address: dep.address,
       deposit_index: dep.index,
+      max_drift_bps: slippage,
       expires_at: Date.now() + cfg.ORDER_TTL_MINUTES * 60_000,
     });
-    return { token, order: orderView(order), quote: quoteView(plan, await needsReview(amountIn, from)) };
+    return { token, order: orderView(order), quote: quoteView(plan, await needsReview(amountIn, from), slippage) };
   });
 
   const authorizedOrder = (req: FastifyRequest<{ Params: { id: string } }>): OrderRow => {
@@ -248,7 +274,10 @@ export async function buildServer(
       : from.chain === "TRON" ? o.deposit_address // Tron wallets scan the plain address
       : from.chain === "XMR" ? `monero:${o.deposit_address}?tx_amount=${amount}`
       : from.chain === "BTC" ? `bitcoin:${o.deposit_address}?amount=${amount}`
-      : `ethereum:${o.deposit_address}@${EVM_CHAIN_ID[from.chain]}`;
+      : from.chain === "LTC" ? `litecoin:${o.deposit_address}?amount=${amount}`
+      : from.chain === "SOL" ? `solana:${o.deposit_address}?amount=${amount}` // Solana Pay, native SOL
+      : isEvmChain(from.chain) ? `ethereum:${o.deposit_address}@${EVM_CHAIN_ID[from.chain]}?value=${o.amount_in}` // EIP-681 native
+      : o.deposit_address;
     const svg = await QRCode.toString(uri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
     return reply.type("image/svg+xml").send(svg);
   });

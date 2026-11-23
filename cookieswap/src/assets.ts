@@ -2,20 +2,25 @@ import { createHash } from "node:crypto";
 import * as bitcoin from "bitcoinjs-lib";
 import { isAddress } from "viem";
 import { base58Decode, base58Encode } from "./validate/base58";
+import { isAdaAddress, isBchAddress, isDogeAddress, isLtcAddress, isSuiAddress, isXlmAddress, isXrpAddress } from "./validate/chains";
 import { parseMoneroAddress } from "./validate/monero";
 
 export type Network = "mainnet" | "testnet";
 /** A blockchain. EVM chains share one key tree; see `keyFamily`. */
-export type ChainId = "BTC" | "ETH" | "BSC" | "POL" | "BASE" | "ARB" | "TRON" | "SOL" | "XMR" | "ZEC";
+export type ChainId =
+  | "BTC" | "ETH" | "BSC" | "POL" | "BASE" | "ARB" | "AVAX" | "TRON" | "SOL" | "XMR" | "ZEC"
+  | "XRP" | "DOGE" | "ADA" | "XLM" | "BCH" | "LTC" | "SUI";
 export type AssetId =
   | "BTC" | "ETH" | "XMR" | "SOL" | "ZEC"
   | "USDT-ETH" | "USDT-TRON" | "USDT-BSC" | "USDT-SOL" | "USDT-POL"
   | "USDC-ETH" | "USDC-SOL" | "USDC-BASE" | "USDC-ARB" | "USDC-POL"
   | "DAI-ETH"
-  // gas-only assets: used to price network fees, not offered to users
-  | "BNB" | "POL" | "TRX";
+  // top-20 coins (by market cap, those a DEX route supports)
+  | "BNB" | "TRX" | "AVAX" | "LINK" | "UNI" | "LTC" | "XRP" | "DOGE" | "ADA" | "XLM" | "BCH" | "SUI"
+  // gas-only asset: used to price network fees, not offered to users
+  | "POL";
 
-export const EVM_CHAINS = ["ETH", "BSC", "POL", "BASE", "ARB"] as const;
+export const EVM_CHAINS = ["ETH", "BSC", "POL", "BASE", "ARB", "AVAX"] as const;
 export type EvmChainId = (typeof EVM_CHAINS)[number];
 
 export function isEvmChain(chain: ChainId): chain is EvmChainId {
@@ -29,12 +34,14 @@ export function keyFamily(chain: ChainId): string {
 
 /** Native coin that pays gas on each chain (for fee pricing). */
 export const GAS_ASSET: Record<ChainId, AssetId> = {
-  BTC: "BTC", ETH: "ETH", BSC: "BNB", POL: "POL", BASE: "ETH", ARB: "ETH", TRON: "TRX", SOL: "SOL", XMR: "XMR", ZEC: "ZEC",
+  BTC: "BTC", ETH: "ETH", BSC: "BNB", POL: "POL", BASE: "ETH", ARB: "ETH", AVAX: "AVAX", TRON: "TRX", SOL: "SOL",
+  XMR: "XMR", ZEC: "ZEC", XRP: "XRP", DOGE: "DOGE", ADA: "ADA", XLM: "XLM", BCH: "BCH", LTC: "LTC", SUI: "SUI",
 };
 
 /** Short network codes for the UI, e.g. "USDT · TRC20". */
 export const NETWORK_CODE: Record<ChainId, string> = {
-  BTC: "BTC", ETH: "ERC20", BSC: "BEP20", POL: "Polygon", BASE: "Base", ARB: "Arbitrum", TRON: "TRC20", SOL: "SPL", XMR: "XMR", ZEC: "ZEC",
+  BTC: "BTC", ETH: "ERC20", BSC: "BEP20", POL: "Polygon", BASE: "Base", ARB: "Arbitrum", AVAX: "Avalanche", TRON: "TRC20",
+  SOL: "SPL", XMR: "XMR", ZEC: "ZEC", XRP: "XRP", DOGE: "DOGE", ADA: "Cardano", XLM: "Stellar", BCH: "BCH", LTC: "LTC", SUI: "Sui",
 };
 
 export interface Asset {
@@ -55,6 +62,10 @@ export interface Asset {
   listed: boolean;
   /** Stablecoin (USDT/USDC/DAI): receiving one costs STABLE_PAYOUT_FEE_BPS. */
   stable: boolean;
+  /** Chains where exchange deposit addresses usually need a destination tag/memo, which we can't attach. */
+  memoWarning?: boolean;
+  /** Rank by market cap when added (for sorting the token list). */
+  rank?: number;
   thorchain?: string;
   maya?: string;
   near?: string;
@@ -71,35 +82,41 @@ function stable(
 ): Asset {
   return {
     id, symbol, name, chain, network, decimals, contracts: { mainnet },
-    depositable: true, inventory: false, listed: true, stable: true, near, ...price, ...extra,
+    depositable: true, inventory: false, listed: true, stable: true, near, ...price,
+    rank: symbol === "USDT" ? 3 : symbol === "USDC" ? 5 : 24, ...extra,
   };
+}
+
+/** Native coin of a chain we only pay out to (no deposit wallet yet). */
+function receiveOnly(id: AssetId, name: string, chain: ChainId, network: string, decimals: number, ids: Partial<Asset>): Asset {
+  return { id, symbol: id, name, chain, network, decimals, depositable: false, inventory: false, listed: true, stable: false, ...ids };
 }
 
 export const ASSETS: Record<AssetId, Asset> = {
   BTC: {
     id: "BTC", symbol: "BTC", name: "Bitcoin", chain: "BTC", network: "Bitcoin", decimals: 8,
-    depositable: true, inventory: true, listed: true, stable: false,
+    depositable: true, inventory: true, listed: true, stable: false, rank: 1,
     thorchain: "BTC.BTC", maya: "BTC.BTC", near: "nep141:btc.omft.near", kraken: "XBTUSD", coingecko: "bitcoin",
   },
   ETH: {
     id: "ETH", symbol: "ETH", name: "Ethereum", chain: "ETH", network: "Ethereum", decimals: 18,
-    depositable: true, inventory: true, listed: true, stable: false,
+    depositable: true, inventory: true, listed: true, stable: false, rank: 2,
     thorchain: "ETH.ETH", maya: "ETH.ETH", near: "nep141:eth.omft.near", kraken: "ETHUSD", coingecko: "ethereum",
   },
   XMR: {
     id: "XMR", symbol: "XMR", name: "Monero", chain: "XMR", network: "Monero", decimals: 12,
-    depositable: true, inventory: true, listed: true, stable: false,
+    depositable: true, inventory: true, listed: true, stable: false, rank: 13,
     // THORChain announced native XMR; the provider only uses it once an XMR.XMR pool is live.
     thorchain: "XMR.XMR", kraken: "XMRUSD", coingecko: "monero",
   },
   SOL: {
     id: "SOL", symbol: "SOL", name: "Solana", chain: "SOL", network: "Solana", decimals: 9,
-    depositable: false, inventory: false, listed: true, stable: false,
-    near: "nep141:sol.omft.near", kraken: "SOLUSD", coingecko: "solana",
+    depositable: true, inventory: false, listed: true, stable: false, rank: 7,
+    thorchain: "SOL.SOL", near: "nep141:sol.omft.near", kraken: "SOLUSD", coingecko: "solana",
   },
   ZEC: {
     id: "ZEC", symbol: "ZEC", name: "Zcash", chain: "ZEC", network: "Zcash", decimals: 8,
-    depositable: false, inventory: false, listed: true, stable: false,
+    depositable: false, inventory: false, listed: true, stable: false, rank: 11,
     thorchain: "ZEC.ZEC", maya: "ZEC.ZEC", near: "nep141:zec.omft.near", kraken: "ZECUSD", coingecko: "zcash",
   },
 
@@ -145,18 +162,60 @@ export const ASSETS: Record<AssetId, Asset> = {
     "0x6B175474E89094C44Da98b954EedeAC495271d0F", "nep141:eth-0x6b175474e89094c44da98b954eedeac495271d0f.omft.near",
     { kraken: "DAIUSD", coingecko: "dai" }),
 
-  // --- gas-only (fee pricing) ---
+  // --- top-20 coins: deposit + payout (deposit wallets: EVM native, ERC-20, Tron native, Litecoin) ---
   BNB: {
     id: "BNB", symbol: "BNB", name: "BNB", chain: "BSC", network: "BNB Smart Chain", decimals: 18,
-    depositable: false, inventory: false, listed: false, stable: false, kraken: "BNBUSD", coingecko: "binancecoin",
-  },
-  POL: {
-    id: "POL", symbol: "POL", name: "Polygon", chain: "POL", network: "Polygon PoS", decimals: 18,
-    depositable: false, inventory: false, listed: false, stable: false, kraken: "POLUSD", coingecko: "polygon-ecosystem-token",
+    depositable: true, inventory: false, listed: true, stable: false, rank: 4,
+    thorchain: "BSC.BNB", near: "nep141:bnb.omdep.near", kraken: "BNBUSD", coingecko: "binancecoin",
   },
   TRX: {
     id: "TRX", symbol: "TRX", name: "Tron", chain: "TRON", network: "Tron", decimals: 6,
-    depositable: false, inventory: false, listed: false, stable: false, kraken: "TRXUSD", coingecko: "tron",
+    depositable: true, inventory: false, listed: true, stable: false, rank: 8,
+    thorchain: "TRON.TRX", near: "nep141:tron.omft.near", kraken: "TRXUSD", coingecko: "tron",
+  },
+  AVAX: {
+    id: "AVAX", symbol: "AVAX", name: "Avalanche", chain: "AVAX", network: "Avalanche C-Chain", decimals: 18,
+    depositable: true, inventory: false, listed: true, stable: false, rank: 33,
+    thorchain: "AVAX.AVAX", near: "nep141:avax.omdep.near", kraken: "AVAXUSD", coingecko: "avalanche-2",
+  },
+  LINK: {
+    id: "LINK", symbol: "LINK", name: "Chainlink", chain: "ETH", network: "Ethereum (ERC-20)", decimals: 18,
+    contracts: { mainnet: "0x514910771AF9Ca656af840dff83E8264EcF986CA" },
+    depositable: true, inventory: false, listed: true, stable: false, rank: 18,
+    near: "nep141:eth-0x514910771af9ca656af840dff83e8264ecf986ca.omft.near", kraken: "LINKUSD", coingecko: "chainlink",
+  },
+  UNI: {
+    id: "UNI", symbol: "UNI", name: "Uniswap", chain: "ETH", network: "Ethereum (ERC-20)", decimals: 18,
+    contracts: { mainnet: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984" },
+    depositable: true, inventory: false, listed: true, stable: false, rank: 32,
+    near: "nep141:eth-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984.omft.near", kraken: "UNIUSD", coingecko: "uniswap",
+  },
+  LTC: {
+    id: "LTC", symbol: "LTC", name: "Litecoin", chain: "LTC", network: "Litecoin", decimals: 8,
+    depositable: true, inventory: false, listed: true, stable: false, rank: 30,
+    thorchain: "LTC.LTC", near: "nep141:ltc.omft.near", kraken: "LTCUSD", coingecko: "litecoin",
+  },
+
+  // --- top-20 coins: payout only (each needs its own deposit wallet type first) ---
+  XRP: receiveOnly("XRP", "XRP", "XRP", "XRP Ledger", 6,
+    { rank: 6, memoWarning: true, thorchain: "XRP.XRP", near: "nep141:xrp.omft.near", kraken: "XRPUSD", coingecko: "ripple" }),
+  DOGE: receiveOnly("DOGE", "Dogecoin", "DOGE", "Dogecoin", 8,
+    { rank: 12, thorchain: "DOGE.DOGE", near: "nep141:doge.omft.near", kraken: "XDGUSD", coingecko: "dogecoin" }),
+  ADA: receiveOnly("ADA", "Cardano", "ADA", "Cardano", 6,
+    { rank: 22, maya: "ADA.ADA", near: "nep141:cardano.omft.near", kraken: "ADAUSD", coingecko: "cardano" }),
+  XLM: receiveOnly("XLM", "Stellar", "XLM", "Stellar", 7, {
+    rank: 23, memoWarning: true, kraken: "XLMUSD", coingecko: "stellar",
+    near: "nep245:v2_1.omni.hot.tg:1100_111bzQBB5v7AhLyPMDwS8uJgQV24KaAPXtwyVWu2KXbbfQU6NXRCz",
+  }),
+  BCH: receiveOnly("BCH", "Bitcoin Cash", "BCH", "Bitcoin Cash", 8,
+    { rank: 26, thorchain: "BCH.BCH", near: "nep141:bch.omft.near", kraken: "BCHUSD", coingecko: "bitcoin-cash" }),
+  SUI: receiveOnly("SUI", "Sui", "SUI", "Sui", 9,
+    { rank: 36, near: "nep141:sui.omft.near", kraken: "SUIUSD", coingecko: "sui" }),
+
+  // --- gas-only (fee pricing) ---
+  POL: {
+    id: "POL", symbol: "POL", name: "Polygon", chain: "POL", network: "Polygon PoS", decimals: 18,
+    depositable: false, inventory: false, listed: false, stable: false, kraken: "POLUSD", coingecko: "polygon-ecosystem-token",
   },
 };
 
@@ -222,6 +281,20 @@ export function isValidAddress(chain: ChainId, address: string, network: Network
     }
     case "TRON":
       return isTronAddress(a);
+    case "XRP":
+      return network === "mainnet" && isXrpAddress(a);
+    case "DOGE":
+      return network === "mainnet" && isDogeAddress(a);
+    case "LTC":
+      return network === "mainnet" && isLtcAddress(a);
+    case "BCH":
+      return network === "mainnet" && isBchAddress(a);
+    case "ADA":
+      return network === "mainnet" && isAdaAddress(a);
+    case "XLM":
+      return network === "mainnet" && isXlmAddress(a);
+    case "SUI":
+      return isSuiAddress(a);
     case "ZEC":
       if (a.startsWith("tex1")) return false; // TEX addresses are refused by most routes
       if (network === "mainnet" && new RegExp(`^u1${BECH32}{100,}$`).test(a)) return true;
@@ -241,8 +314,16 @@ export const PLACEHOLDER_ADDRESS: Record<ChainId, string> = {
   POL: EVM_PLACEHOLDER,
   BASE: EVM_PLACEHOLDER,
   ARB: EVM_PLACEHOLDER,
+  AVAX: EVM_PLACEHOLDER,
   SOL: base58Encode(new Uint8Array(32).fill(0x01)),
   TRON: base58CheckEncode(Uint8Array.from([0x41, ...new Array(20).fill(0x01)])),
   ZEC: base58CheckEncode(Uint8Array.from([0x1c, 0xb8, ...new Array(20).fill(0x01)])),
   XMR: "",
+  XRP: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", // XRP Ledger genesis account
+  DOGE: base58CheckEncode(Uint8Array.from([0x1e, ...new Array(20).fill(0x01)])),
+  LTC: "ltc1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpq4933p",
+  BCH: "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a", // CashAddr spec example
+  ADA: "addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x", // CIP-19 example
+  XLM: "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ",
+  SUI: `0x${"01".repeat(32)}`,
 };

@@ -34,6 +34,11 @@ const schema = z.object({
   BASE_CONFIRMATIONS: z.coerce.number().int().min(0).default(30),
   ARB_RPC_URL: z.string().optional(),
   ARB_CONFIRMATIONS: z.coerce.number().int().min(0).default(60),
+  AVAX_RPC_URL: z.string().optional(),
+  AVAX_CONFIRMATIONS: z.coerce.number().int().min(0).default(5),
+  /** Litecoin: mempool/Esplora-compatible API. */
+  LTC_ESPLORA_URL: z.string().default("https://litecoinspace.org/api"),
+  LTC_CONFIRMATIONS: z.coerce.number().int().min(0).default(6),
   /** Tron (TRC-20). Confirmed = solidified by the network (~1 min). */
   TRON_API_URL: z.string().default("https://api.trongrid.io"),
   TRONGRID_API_KEY: z.string().optional(),

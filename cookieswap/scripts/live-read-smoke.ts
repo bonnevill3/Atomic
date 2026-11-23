@@ -6,7 +6,7 @@ import { SolanaKeys, SplWallet } from "../src/chains/solana";
 
 const m = generateMnemonic(256); // throwaway, never printed
 const btc = new BtcWallet(new BtcKeys(m, "mainnet"), "https://blockstream.info/api", 2);
-const eth = new EvmWallet(new EvmKeys(m), new EvmRpc("ETH", "mainnet"), 12);
+const eth = new EvmWallet("ETH", new EvmKeys(m), new EvmRpc("ETH", "mainnet"), 12);
 const usdcSol = new SplWallet(
   "USDC-SOL", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 6, new SolanaKeys(m),
   SplWallet.connect("https://api.mainnet-beta.solana.com"),

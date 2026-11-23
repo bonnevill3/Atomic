@@ -58,6 +58,8 @@ export const coingeckoSource: PriceSource = {
  */
 export class PriceOracle {
   private cache = new Map<AssetId, { price: Price; at: number }>();
+  private refreshing: Promise<void> | null = null;
+  private refreshedAt = 0;
 
   constructor(
     private assets: Asset[],
@@ -78,7 +80,26 @@ export class PriceOracle {
     return p.price;
   }
 
-  private async refresh(): Promise<void> {
+  /**
+   * Display prices (USD) for every asset whose sources currently agree. Assets without a
+   * trustworthy price are left out, so the caller shows nothing rather than a wrong number.
+   */
+  async prices(): Promise<Partial<Record<AssetId, number>>> {
+    if (Date.now() - this.refreshedAt >= this.ttlMs) await this.refresh();
+    const out: Partial<Record<AssetId, number>> = {};
+    for (const [id, { price }] of this.cache) if (price.deviationBps <= this.maxDeviationBps) out[id] = price.usd;
+    return out;
+  }
+
+  /** One refresh at a time: concurrent callers share the in-flight one. */
+  private refresh(): Promise<void> {
+    this.refreshing ??= this.fetchAll().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async fetchAll(): Promise<void> {
     const results = await Promise.all(this.sources.map((s) => s.usd(this.assets)));
     const now = Date.now();
     for (const a of this.assets) {
@@ -93,5 +114,6 @@ export class PriceOracle {
       const deviationBps = Math.round(((vals[vals.length - 1] - vals[0]) / vals[0]) * 10_000);
       this.cache.set(a.id, { price: { usd: mid, sources: vals.length, deviationBps }, at: now });
     }
+    this.refreshedAt = now;
   }
 }

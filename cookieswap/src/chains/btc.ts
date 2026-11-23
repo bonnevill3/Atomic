@@ -3,7 +3,8 @@ import { mnemonicToSeedSync } from "bip39";
 import * as bitcoin from "bitcoinjs-lib";
 import { ECPairFactory } from "ecpair";
 import * as ecc from "tiny-secp256k1";
-import type { Network } from "../assets";
+import type { AssetId, ChainId, Network } from "../assets";
+import { LITECOIN } from "../validate/chains";
 import { fetchJson } from "../log";
 import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult } from "./types";
 
@@ -13,15 +14,25 @@ const ECPair = ECPairFactory(ecc);
 
 interface Utxo { txid: string; vout: number; value: number; status: { confirmed: boolean; block_height?: number } }
 
+/** A UTXO coin with BIP84 (native segwit) support. */
+export interface UtxoCoin {
+  network: bitcoin.Network;
+  /** BIP44 coin type. */
+  coinType: number;
+}
+
+export const LITECOIN_COIN: UtxoCoin = { network: LITECOIN, coinType: 2 };
+
 /** Pure derivation: m/84'/coin'/0'/0/i for deposits, m/84'/coin'/1'/0/0 for inventory. */
 export class BtcKeys {
   readonly network: bitcoin.Network;
   private root: BIP32Interface;
   private coin: number;
 
-  constructor(mnemonic: string, net: Network) {
-    this.network = net === "mainnet" ? bitcoin.networks.bitcoin : bitcoin.networks.testnet;
-    this.coin = net === "mainnet" ? 0 : 1;
+  /** Bitcoin by default; pass `LITECOIN_COIN` for Litecoin (mainnet only). */
+  constructor(mnemonic: string, net: Network, coin?: UtxoCoin) {
+    this.network = coin?.network ?? (net === "mainnet" ? bitcoin.networks.bitcoin : bitcoin.networks.testnet);
+    this.coin = coin?.coinType ?? (net === "mainnet" ? 0 : 1);
     this.root = bip32.fromSeed(mnemonicToSeedSync(mnemonic), this.network);
   }
 
@@ -39,16 +50,29 @@ export class BtcKeys {
 /** Approximate vsizes for a P2WPKH spend. */
 const VBYTES = { overhead: 11, input: 68, output: 43, opReturn: 11 + 80 };
 
-/** Bitcoin hot wallet backed by an Esplora HTTP API (blockstream.info / mempool.space / self-hosted). */
+export interface UtxoWalletOptions {
+  asset: AssetId;
+  chain: ChainId;
+  /** "esplora": GET /fee-estimates (blockstream). "mempool": GET /v1/fees/recommended (mempool.space forks, litecoinspace). */
+  feeApi: "esplora" | "mempool";
+}
+
+/** Bitcoin-family (BTC, LTC) hot wallet backed by an Esplora/mempool HTTP API. */
 export class BtcWallet implements ChainWallet {
-  readonly asset = "BTC" as const;
-  readonly chain = "BTC" as const;
+  readonly asset: AssetId;
+  readonly chain: ChainId;
+  private feeApi: UtxoWalletOptions["feeApi"];
 
   constructor(
     private keys: BtcKeys,
     private esplora: string,
     private confirmations: number,
-  ) {}
+    opts: UtxoWalletOptions = { asset: "BTC", chain: "BTC", feeApi: "esplora" },
+  ) {
+    this.asset = opts.asset;
+    this.chain = opts.chain;
+    this.feeApi = opts.feeApi;
+  }
 
   async depositAddress(index: number) {
     return { address: this.keys.address({ kind: "deposit", index }), index };
@@ -86,13 +110,19 @@ export class BtcWallet implements ChainWallet {
   }
 
   private async feeRate(): Promise<number> {
+    if (this.feeApi === "mempool") {
+      const rec = await fetchJson<{ halfHourFee: number }>(`${this.esplora}/v1/fees/recommended`);
+      return Math.max(1, Math.ceil(rec.halfHourFee));
+    }
     const est = await fetchJson<Record<string, number>>(`${this.esplora}/fee-estimates`);
-    return Math.max(1, Math.ceil(est["3"] ?? est["6"] ?? 2));
+    const target = est["3"] ?? est["6"];
+    if (target === undefined) throw new Error("esplora fee-estimates without a 3/6-block target");
+    return Math.max(1, Math.ceil(target));
   }
 
   async estimateSendFee(memo: boolean): Promise<Fee> {
     const vsize = VBYTES.overhead + VBYTES.input + 2 * VBYTES.output + (memo ? VBYTES.opReturn : 0);
-    return { asset: "BTC", amount: BigInt(vsize * (await this.feeRate())) };
+    return { asset: this.asset, amount: BigInt(vsize * (await this.feeRate())) };
   }
 
   async send(req: SendRequest): Promise<SendResult> {

@@ -1,17 +1,24 @@
 import { type Asset, ASSETS, type EvmChainId, GAS_ASSET, isEvmChain, tokenContract } from "../assets";
 import type { Config } from "../config";
-import { BtcKeys, BtcWallet } from "./btc";
+import { BtcKeys, BtcWallet, LITECOIN_COIN } from "./btc";
 import { Erc20Wallet } from "./erc20";
 import { EvmKeys, EvmRpc, EvmWallet } from "./evm";
 import { DryRunWallet, MockWallet } from "./mock";
-import { SolanaKeys, SplWallet } from "./solana";
-import { TronApi, TronKeys, TronWallet } from "./tron";
+import { SolanaKeys, SolWallet, SplWallet } from "./solana";
+import { TronApi, TronKeys, TronWallet, TrxWallet } from "./tron";
 import type { ChainWallet, Wallets } from "./types";
 import { XmrWallet } from "./xmr";
 
 /** Well-known BIP39 test vector; only used to give mock deposit addresses a realistic format. */
 const MOCK_MNEMONIC =
   "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+/** Depositable native EVM coins on this network (ETH everywhere; BNB/AVAX on mainnet only). */
+function nativeDepositAssets(cfg: Config): Asset[] {
+  return Object.values(ASSETS).filter(
+    (a) => a.depositable && !a.contracts && isEvmChain(a.chain) && (cfg.NETWORK === "mainnet" || a.chain === "ETH"),
+  );
+}
 
 /** Deposit tokens that have a contract/mint on the configured network. */
 function tokens(cfg: Config): { asset: Asset; contract: string }[] {
@@ -28,6 +35,7 @@ function evmSettings(cfg: Config, chain: EvmChainId): { rpcUrl?: string; confirm
     POL: [cfg.POL_RPC_URL, cfg.POL_CONFIRMATIONS],
     BASE: [cfg.BASE_RPC_URL, cfg.BASE_CONFIRMATIONS],
     ARB: [cfg.ARB_RPC_URL, cfg.ARB_CONFIRMATIONS],
+    AVAX: [cfg.AVAX_RPC_URL, cfg.AVAX_CONFIRMATIONS],
   } as const;
   const [rpcUrl, confirmations] = map[chain];
   return { rpcUrl, confirmations };
@@ -52,9 +60,20 @@ export function createWallets(cfg: Config): Wallets {
 
   const wallets: Wallets = {
     BTC: new BtcWallet(new BtcKeys(mnemonic, cfg.NETWORK), esplora, cfg.BTC_CONFIRMATIONS),
-    ETH: new EvmWallet(evmKeys, evmRpc("ETH"), cfg.ETH_CONFIRMATIONS),
     XMR: new XmrWallet(cfg.XMR_WALLET_RPC_URL, cfg.XMR_CONFIRMATIONS),
   };
+  // Native coins on EVM chains (ETH, BNB, AVAX) share the EVM key tree.
+  for (const a of nativeDepositAssets(cfg).filter((x) => isEvmChain(x.chain))) {
+    const chain = a.chain as EvmChainId;
+    wallets[a.id] = new EvmWallet(a.id, evmKeys, evmRpc(chain), evmSettings(cfg, chain).confirmations);
+  }
+  if (cfg.NETWORK === "mainnet") {
+    wallets.TRX = new TrxWallet(tronKeys, tronApi);
+    wallets.SOL = new SolWallet(solanaKeys, solana);
+    wallets.LTC = new BtcWallet(new BtcKeys(mnemonic, "mainnet", LITECOIN_COIN), cfg.LTC_ESPLORA_URL, cfg.LTC_CONFIRMATIONS, {
+      asset: "LTC", chain: "LTC", feeApi: "mempool",
+    });
+  }
   for (const { asset, contract } of tokens(cfg)) {
     if (isEvmChain(asset.chain)) {
       const { confirmations } = evmSettings(cfg, asset.chain);
@@ -79,19 +98,27 @@ function createMockWallets(cfg: Config): Wallets {
   const tron = new TronKeys(MOCK_MNEMONIC);
   const sol = new SolanaKeys(MOCK_MNEMONIC);
   const evmAddress = (i: number) => evm.account({ kind: "deposit", index: i }).address;
+  const ltc = new BtcKeys(MOCK_MNEMONIC, "mainnet", LITECOIN_COIN);
+  const tronAddress = (i: number) => tron.account({ kind: "deposit", index: i }).address;
   const wallets: Wallets = {
     BTC: new MockWallet("BTC", "BTC", 50_000_000n, 1_500n, (i) => btc.address({ kind: "deposit", index: i })),
     ETH: new MockWallet("ETH", "ETH", 5n * 10n ** 18n, 500_000_000_000_000n, evmAddress),
     XMR: new MockWallet("XMR", "XMR", 100n * 10n ** 12n, 100_000_000n),
+    // native coins without inventory: network fee in their own unit
+    BNB: new MockWallet("BNB", "BSC", 0n, 100_000_000_000_000n, evmAddress),
+    AVAX: new MockWallet("AVAX", "AVAX", 0n, 1_000_000_000_000_000n, evmAddress),
+    TRX: new MockWallet("TRX", "TRON", 0n, 1_450_000n, tronAddress),
+    SOL: new MockWallet("SOL", "SOL", 0n, 10_000n, (i) => sol.address({ kind: "deposit", index: i })),
+    LTC: new MockWallet("LTC", "LTC", 0n, 2_000n, (i) => ltc.address({ kind: "deposit", index: i })),
   };
   // Token mocks pay "gas" in the chain's native coin like the real wallets (Tron: ~15 TRX burn).
   const mockGas: Record<string, bigint> = {
     ETH: 500_000_000_000_000n, BSC: 100_000_000_000_000n, POL: 20_000_000_000_000_000n,
-    BASE: 2_000_000_000_000n, ARB: 2_000_000_000_000n, TRON: 15_000_000n, SOL: 2_050_000n,
+    BASE: 2_000_000_000_000n, ARB: 2_000_000_000_000n, AVAX: 1_000_000_000_000_000n, TRON: 15_000_000n, SOL: 2_050_000n,
   };
   for (const { asset } of tokens(cfg)) {
     const addressFor = isEvmChain(asset.chain) ? evmAddress
-      : asset.chain === "TRON" ? (i: number) => tron.account({ kind: "deposit", index: i }).address
+      : asset.chain === "TRON" ? tronAddress
       : (i: number) => sol.address({ kind: "deposit", index: i });
     wallets[asset.id] = new MockWallet(asset.id, asset.chain, 0n, mockGas[asset.chain], addressFor, GAS_ASSET[asset.chain]);
   }

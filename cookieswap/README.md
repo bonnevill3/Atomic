@@ -39,16 +39,33 @@ The router asks every route for a quote and picks the one with the **highest out
 - DEX costs (pool fees, solver spread) are part of the DEX quote, so they're already in the rate.
 - If you set an inventory spread, the quote shows it next to the fee ("Our fee (1% + 0.5% spread)"). It is never hidden.
 
-### What the swap page shows (modelled on wagyu.xyz's information, with our own facts)
-- **Quote:**
-  - rate after fees, our fee with its percentage, network fee
-  - **minimum you receive** (the DEX slippage limit), route by name (THORChain / Maya Protocol / NEAR Intents / cookieswap inventory), estimated time
-  - a note that rates aren't locked and that a move of more than `MAX_RATE_DRIFT_BPS` against the user becomes a refund
+### The swap page
+cookieswap has its own look (warm dark theme with a light-mode variant); the UX patterns follow modern swap apps such as wagyu.xyz. Plain HTML/CSS/JS, no build step, strict CSP (`'self'` only, no external fonts, images or scripts).
+- **Swap card:** "You send" / "You receive" panels with large amounts, USD values (from `GET /api/prices`), a value-difference hint, and a flip button (refuses receive-only coins).
+- **Token picker:** searchable modal (name, symbol or network), popular-token chips, ranking by market cap, network badges, USD prices, "Receive only" tags; a bottom sheet on phones.
+- **Slippage settings** (gear icon): Auto (`MAX_RATE_DRIFT_BPS`), 0.5%, 1%, 3% or custom 0.1–5%. The choice is sent with the quote and stored on the order (`max_drift_bps`), and the engine refunds if the fresh rate at execution is worse than that.
+- **Transaction details** (collapsible): rate (tap to invert), our fee, network fee, slippage, **minimum received** (= DEX limit minus your slippage), route ("best of N"), estimated time. Quotes refresh every 30 s (progress ring).
+- **Connect wallet (optional):** EVM wallets via EIP-6963 (falls back to `window.ethereum`). Fills in addresses, shows balances with **Max** (keeps gas back), switches networks, and on the order screen **sends the deposit** in one click (native transfer or ERC-20 `transfer`). It never asks for signatures or approvals; non-EVM deposits work as before (address + QR).
+- **Order screen:** stepper (Deposit → Confirming → Swapping → Done), exact amount and address with copy buttons, QR in the network's payment format, live expiry countdown, status pill, recent swaps kept in this browser.
+- **Warnings:** XRP and XLM payouts warn not to use exchange addresses that need a destination tag/memo (we can't attach one); token deposits warn about the network.
+- Responsive down to 320 px, hover/press micro-animations, honours `prefers-reduced-motion`.
 - **FAQ section**, filled from `GET /api/info` so it always matches the running config:
   - how it works, what it costs (fee table), how long it takes (per network, from the confirmation settings)
   - limits and the manual review, what happens when something goes wrong
   - custody, stated plainly: we hold the deposit during the swap
   - what data is stored, supported networks, and which exchanges are compared
+
+### Coins: the top 20
+The 20 largest coins by market cap (CoinPaprika, 23 Nov 2026) that a DEX route can deliver. Wrapped/staked derivatives (WBTC, stETH, …) are left out, and HYPE, LEO, WBT, USDS and USDe have no route on THORChain, Maya or NEAR Intents, so the next coins move up.
+
+| | Coins |
+|---|---|
+| **Send and receive** | BTC, ETH, XMR, USDT, USDC, DAI, **BNB, SOL, TRX, AVAX, LTC, LINK, UNI** |
+| **Receive only** (no deposit wallet yet) | **XRP, DOGE, ADA, XLM, BCH, SUI**, ZEC |
+
+- **New deposit wallets:** native BNB (BSC) and AVAX (C-Chain) use the EVM wallet on their chain; LINK and UNI are ERC-20s with gas top-ups; TRX is a native Tron transfer (signed locally); SOL is a system transfer with the inventory as fee payer; LTC uses the Bitcoin wallet with BIP84 coin type 2 and a mempool.space-style API (litecoinspace.org).
+- Native deposits pay their own network fee, charged in the quote. They can't use memo routes (THORChain/Maya) from Tron or Solana; those orders go through NEAR Intents.
+- **Address checks** (format and checksum, no network lookups): XRP (ripple base58check), DOGE, LTC (bech32/base58), BCH (CashAddr; legacy `1…` is refused to avoid BTC mix-ups), ADA (Shelley `addr1…`), XLM (StrKey with CRC16), SUI. Cross-checked against the reference libraries.
 
 ### Stablecoin deposits: 11 networks
 I picked the networks by circulating supply (DefiLlama, 23 Nov 2026), keeping only those a DEX route supports:
@@ -110,7 +127,7 @@ These are **quotes**, run with mock chains and dry-run; nothing has been sent on
 Notes:
 - At the time of the check, THORChain had **BTC and BASE halted**. Maya's BTC was live.
 - No DEX lists native XMR (THORChain has no XMR pool, and neither NEAR nor Maya lists XMR), so XMR legs use inventory.
-- Deposits are possible in **BTC, ETH, XMR and the 11 stablecoins**. SOL and ZEC are payout-only.
+- Deposits are possible in **BTC, ETH, XMR, BNB, SOL, TRX, AVAX, LTC, LINK, UNI and the 11 stablecoins**. XRP, DOGE, ADA, XLM, BCH, SUI and ZEC are payout-only.
 - Every order is quoted on **every** route again when the deposit confirms.
 
 ## Quick start (development, no funds)
@@ -119,7 +136,7 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 77 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
+npm test            # 93 tests: engine, slippage, review gate, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
@@ -187,7 +204,7 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
      - BNB on BSC
      - POL on Polygon
      - TRX on Tron (≈15 TRX per USDT forward; consider staking or renting energy)
-     - SOL on Solana
+     - SOL on Solana: the inventory pays the fee of **every** Solana forward, SOL deposits included
 
      Without it, those orders go to `needs_review`. `GET /admin/inventory` shows the gas balances.
    - stables collected from stable → XMR orders pile up on the ETH inventory address. Sell or rebalance them regularly.
@@ -201,7 +218,7 @@ Lessons taken from Wagyu's incidents (see `../plan/05-wagyu-analysis.md`):
 - **No IP logging, minimal data.** The Fastify logger is off, orders are hard-deleted after `RETENTION_DAYS`, and the order token is stored as a hash only.
 - **Nothing executes on unconfirmed deposits.** Confirmations are configurable per chain:
   - BTC 2, ETH 12, XMR 10
-  - BSC 15, Polygon 64, Base 30, Arbitrum 60
+  - BSC 15, Polygon 64, Base 30, Arbitrum 60, Avalanche 5, Litecoin 6
   - Tron: solidified blocks; Solana: `finalized` commitment
 - **Prices.** The oracle deviation guard blocks quotes when price sources disagree. If every source fails, the price is dropped rather than served stale, and orders wait.
 - **USDC and USDT can be frozen by their issuers** (Circle / Tether blacklist addresses). Your hot wallet holds them while an order runs and as inventory, so keep stable balances low and sweep often.
@@ -232,5 +249,5 @@ Running this for the public without a licence is not legal there. Get legal advi
 - **Chainflip** as a fourth route. It uses deposit channels like NEAR and has native BTC/ETH/SOL and stables. Its quoting API was down for maintenance on 23 Nov 2026; add it once it is back.
 - **THORChain/Maya for token deposits.** Add `approve` + `router.depositWithExpiry`, so stable deposits can also use their pools. Maya often has the best stable rates.
 - **Arbitrum USDT** via Maya (it has an `ARB.USDT` pool), once token deposits through the router exist.
-- **More deposit coins.** SOL and ZEC deposit wallets, Lightning.
+- **More deposit coins.** Deposit wallets for XRP, DOGE, ADA, XLM, BCH, SUI and ZEC (they are payout-only today), Lightning.
 - **Affiliate fees.** THORChain affiliate memo and 1Click `appFees`, instead of deducting the fee before forwarding.

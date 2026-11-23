@@ -9,8 +9,8 @@ import {
   type Transport,
 } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
-import { arbitrum, base, bsc, mainnet, polygon, sepolia } from "viem/chains";
-import type { EvmChainId, Network } from "../assets";
+import { arbitrum, avalanche, base, bsc, mainnet, polygon, sepolia } from "viem/chains";
+import type { AssetId, EvmChainId, Network } from "../assets";
 import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult, SendSource } from "./types";
 
 const GAS_PLAIN = 21_000n;
@@ -27,13 +27,14 @@ export class EvmKeys {
   }
 }
 
-const VIEM_CHAIN: Record<EvmChainId, Chain> = { ETH: mainnet, BSC: bsc, POL: polygon, BASE: base, ARB: arbitrum };
+const VIEM_CHAIN: Record<EvmChainId, Chain> = { ETH: mainnet, BSC: bsc, POL: polygon, BASE: base, ARB: arbitrum, AVAX: avalanche };
 const DEFAULT_RPC: Record<EvmChainId, string> = {
   ETH: "https://ethereum-rpc.publicnode.com",
   BSC: "https://bsc-rpc.publicnode.com",
   POL: "https://polygon-bor-rpc.publicnode.com",
   BASE: "https://base-rpc.publicnode.com",
   ARB: "https://arbitrum-one-rpc.publicnode.com",
+  AVAX: "https://avalanche-c-chain-rpc.publicnode.com",
 };
 
 /** JSON-RPC access to one EVM chain, shared by its native and ERC-20 wallets. */
@@ -71,16 +72,18 @@ export class EvmRpc {
   }
 }
 
-/** Ethereum (native ETH) hot wallet over JSON-RPC. */
+/** Native-coin hot wallet on an EVM chain (ETH on Ethereum, BNB on BSC, AVAX on Avalanche) over JSON-RPC. */
 export class EvmWallet implements ChainWallet {
-  readonly asset = "ETH" as const;
-  readonly chain = "ETH" as const;
+  readonly chain: EvmChainId;
 
   constructor(
+    readonly asset: AssetId,
     private keys: EvmKeys,
     private rpc: EvmRpc,
     private confirmations: number,
-  ) {}
+  ) {
+    this.chain = rpc.chainId;
+  }
 
   async depositAddress(index: number) {
     return { address: this.keys.account({ kind: "deposit", index }).address, index };
@@ -105,7 +108,7 @@ export class EvmWallet implements ChainWallet {
   }
 
   async estimateSendFee(memo: boolean): Promise<Fee> {
-    return { asset: "ETH", amount: (memo ? GAS_MEMO : GAS_PLAIN) * (await this.rpc.fees()).maxFeePerGas };
+    return { asset: this.asset, amount: (memo ? GAS_MEMO : GAS_PLAIN) * (await this.rpc.fees()).maxFeePerGas };
   }
 
   async send(req: SendRequest): Promise<SendResult> {
@@ -118,7 +121,7 @@ export class EvmWallet implements ChainWallet {
     const maxFee = gas * fees.maxFeePerGas;
     const balance = await this.rpc.client.getBalance({ address: account.address });
     const value = req.amount === "all" ? balance - maxFee : req.amount;
-    if (value <= 0n || value + maxFee > balance) throw new Error("insufficient ETH for amount + gas");
+    if (value <= 0n || value + maxFee > balance) throw new Error(`insufficient ${this.asset} for amount + gas`);
     const txid = await this.rpc.walletFor(account).sendTransaction({ to: req.to as `0x${string}`, value, data, gas, ...fees });
     return { txid, amount: value, fee: maxFee };
   }

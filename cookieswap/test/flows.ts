@@ -25,6 +25,14 @@ export function buildFlows(opts: { reviewUsd?: number; dexRate?: number; denylis
     const a = ASSETS[id as AssetId];
     wallets[a.id] = new MockWallet(a.id, a.chain, 0n, fee!, undefined, GAS_ASSET[a.chain]);
   }
+  // Native coins pay their network fee in their own unit and hold no inventory.
+  const nativeFee: Partial<Record<AssetId, bigint>> = {
+    BNB: 100_000_000_000_000n, AVAX: 1_000_000_000_000_000n, TRX: 1_450_000n, SOL: 10_000n, LTC: 2_000n,
+  };
+  for (const [id, fee] of Object.entries(nativeFee)) {
+    const a = ASSETS[id as AssetId];
+    wallets[a.id] = new MockWallet(a.id, a.chain, 0n, fee!);
+  }
   const dex = new FakeDex(opts.dexRate ?? 0.01);
   dex.supports = async (f, t) => f.id !== "XMR" && t.id !== "XMR";
   const router = new Router(env.cfg, env.oracle, [dex], wallets);
@@ -33,13 +41,15 @@ export function buildFlows(opts: { reviewUsd?: number; dexRate?: number; denylis
   const run = async (n: number) => {
     for (let i = 0; i < n; i++) await engine.tick();
   };
-  const order = async (from: AssetId, to: AssetId, amountIn: bigint, recipient: string, refund: string): Promise<{ o: OrderRow; plan: RoutePlan }> => {
+  const order = async (
+    from: AssetId, to: AssetId, amountIn: bigint, recipient: string, refund: string, slippageBps = env.cfg.MAX_RATE_DRIFT_BPS,
+  ): Promise<{ o: OrderRow; plan: RoutePlan }> => {
     const plan = await router.best({ from: ASSETS[from], to: ASSETS[to], amountIn, recipient, dry: true });
     const dep = await wallets[from]!.depositAddress(env.db.allocateIndex(keyFamily(ASSETS[from].chain)));
     const o = env.db.insertOrder({
       id: randomBytes(8).toString("hex"), token_hash: "x", from_asset: from, to_asset: to, amount_in: amountIn.toString(),
       quoted_out: plan.amountOut.toString(), route_kind: plan.kind, provider: plan.label, recipient, refund_address: refund,
-      deposit_chain: ASSETS[from].chain, deposit_address: dep.address, deposit_index: dep.index, expires_at: Date.now() + 3_600_000,
+      deposit_chain: ASSETS[from].chain, deposit_address: dep.address, deposit_index: dep.index, max_drift_bps: slippageBps, expires_at: Date.now() + 3_600_000,
     });
     return { o, plan };
   };

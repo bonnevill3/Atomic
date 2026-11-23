@@ -2,7 +2,8 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as bitcoin from "bitcoinjs-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { BtcKeys, BtcWallet } from "../src/chains/btc";
+import { BtcKeys, BtcWallet, LITECOIN_COIN } from "../src/chains/btc";
+import { LITECOIN } from "../src/validate/chains";
 
 const MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const keys = new BtcKeys(MNEMONIC, "mainnet");
@@ -78,5 +79,57 @@ describe("BtcWallet", () => {
     const tx = bitcoin.Transaction.fromHex(broadcast);
     expect(tx.outs).toHaveLength(1);
     expect(tx.outs[0].value).toBe(1_000_000n - res.fee);
+  });
+});
+
+describe("Litecoin (BtcWallet with LITECOIN_COIN)", () => {
+  const ltcKeys = new BtcKeys(MNEMONIC, "mainnet", LITECOIN_COIN);
+  const ltcDeposit = ltcKeys.address({ kind: "deposit", index: 3 });
+  const DEST = "ltc1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpq4933p";
+  let ltcServer: Server;
+  let ltcBase = "";
+  let ltcBroadcast = "";
+
+  beforeAll(async () => {
+    // litecoinspace.org is a mempool.space fork: fees come from /v1/fees/recommended, not /fee-estimates.
+    ltcServer = createServer((req, res) => {
+      const url = req.url ?? "";
+      if (url === `/address/${ltcDeposit}/utxo`) {
+        res.end(JSON.stringify([{ txid: "44".repeat(32), vout: 0, value: 25_000_000, status: { confirmed: true, block_height: 90 } }]));
+      } else if (url === "/blocks/tip/height") res.end("100");
+      else if (url === "/v1/fees/recommended") res.end(JSON.stringify({ fastestFee: 9, halfHourFee: 3, hourFee: 2 }));
+      else if (url === "/tx" && req.method === "POST") {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          ltcBroadcast = body;
+          res.end(bitcoin.Transaction.fromHex(body).getId());
+        });
+      } else {
+        res.statusCode = 404;
+        res.end("not found");
+      }
+    });
+    await new Promise<void>((r) => ltcServer.listen(0, "127.0.0.1", r));
+    ltcBase = `http://127.0.0.1:${(ltcServer.address() as AddressInfo).port}`;
+  });
+  afterAll(() => ltcServer.close());
+
+  it("derives BIP84 Litecoin addresses (m/84'/2'/0'/0/0 test vector)", () => {
+    expect(ltcKeys.address({ kind: "deposit", index: 0 })).toBe("ltc1qjmxnz78nmc8nq77wuxh25n2es7rzm5c2rkk4wh");
+    expect(ltcKeys.address({ kind: "inventory" })).toMatch(/^ltc1q/);
+  });
+
+  it("sweeps a deposit on Litecoin with the mempool fee API and reports the fee in LTC", async () => {
+    const w = new BtcWallet(ltcKeys, ltcBase, 6, { asset: "LTC", chain: "LTC", feeApi: "mempool" });
+    expect(w.asset).toBe("LTC");
+    expect((await w.estimateSendFee(false)).asset).toBe("LTC");
+    expect(await w.getDeposit(ltcDeposit)).toMatchObject({ seen: 25_000_000n, confirmed: 25_000_000n });
+    const res = await w.send({ from: { kind: "deposit", index: 3 }, to: DEST, amount: "all" });
+    const tx = bitcoin.Transaction.fromHex(ltcBroadcast);
+    expect(tx.outs).toHaveLength(1);
+    expect(bitcoin.address.fromOutputScript(tx.outs[0].script, LITECOIN)).toBe(DEST);
+    expect(res.fee).toBe(BigInt(tx.virtualSize() * 3)); // halfHourFee
+    expect(tx.outs[0].value).toBe(25_000_000n - res.fee);
   });
 });

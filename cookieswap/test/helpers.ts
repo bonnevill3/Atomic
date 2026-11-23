@@ -47,6 +47,7 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
 
 export const TEST_PRICES: Partial<Record<AssetId, number>> = {
   BTC: 60000, ETH: 2000, XMR: 500, SOL: 100, ZEC: 50, BNB: 500, POL: 0.5, TRX: 0.25,
+  AVAX: 30, LTC: 80, LINK: 15, UNI: 8, XRP: 2, DOGE: 0.2, ADA: 0.5, XLM: 0.3, BCH: 400, SUI: 3,
   "USDT-ETH": 1, "USDT-TRON": 1, "USDT-BSC": 1, "USDT-SOL": 1, "USDT-POL": 1,
   "USDC-ETH": 1, "USDC-SOL": 1, "USDC-BASE": 1, "USDC-ARB": 1, "USDC-POL": 1, "DAI-ETH": 1,
 };
@@ -71,7 +72,8 @@ export class FakeDex implements DexProvider {
   status_: DexStatus = { state: "pending" };
   quotes: DexQuoteInput[] = [];
 
-  constructor(private rate: number) {}
+  /** Output units per input unit; tests change it to simulate the market moving. */
+  constructor(public rate: number) {}
 
   async supports(_from: Asset, _to: Asset): Promise<boolean> {
     return true;

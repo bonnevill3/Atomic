@@ -1,4 +1,4 @@
-import { ASSETS, type Asset, getAsset, PLACEHOLDER_ADDRESS } from "./assets";
+import { ASSETS, type Asset, type ChainId, getAsset, PLACEHOLDER_ADDRESS } from "./assets";
 import type { Fee, Wallets } from "./chains/types";
 import type { Config } from "./config";
 import type { RouteKind } from "./db";
@@ -44,9 +44,11 @@ export interface PlanInput {
 }
 
 /** Rough deposit confirmation time per chain, for ETA display. */
-export const CONFIRM_SECONDS = {
-  BTC: 1200, ETH: 160, BSC: 45, POL: 150, BASE: 60, ARB: 30, TRON: 60, SOL: 15, XMR: 1200, ZEC: 300,
-} as const;
+/** Rough time until a deposit on each chain is confirmed (ETA display only). */
+export const CONFIRM_SECONDS: Record<ChainId, number> = {
+  BTC: 1200, ETH: 160, BSC: 45, POL: 150, BASE: 60, ARB: 30, AVAX: 10, TRON: 60, SOL: 15, XMR: 1200, ZEC: 300,
+  XRP: 5, DOGE: 360, ADA: 120, XLM: 6, BCH: 1200, LTC: 900, SUI: 3,
+};
 /** Bridge asset for XMR deposits paid out via a DEX. */
 const BRIDGE: Asset = ASSETS.ETH;
 

@@ -65,56 +65,20 @@ export class TronApi {
 const pad32 = (b: Uint8Array) => Buffer.concat([Buffer.alloc(32 - b.length), Buffer.from(b)]).toString("hex");
 const uint256 = (n: bigint) => n.toString(16).padStart(64, "0");
 
-/**
- * TRC-20 hot wallet (USDT on Tron) over the TronGrid HTTP API.
- *
- * Token transfers burn TRX for energy and bandwidth, so before forwarding from a deposit
- * address we top it up with TRX from the inventory account. Transactions are built,
- * hashed and signed locally (see tronTx.ts); the node only provides chain data and relays.
- */
-export class TronWallet implements ChainWallet {
-  readonly chain = "TRON" as const;
-  private tokenId: Uint8Array;
+/** Chain access shared by the TRC-20 and native TRX wallets: balances, fee parameters, local signing. */
+export class TronNode {
   private params?: { energyFee: bigint; bandwidthFee: bigint; accountFee: bigint; at: number };
 
-  constructor(
-    readonly asset: AssetId,
-    private token: string,
-    private keys: TronKeys,
-    private api: TronApi,
-  ) {
-    this.tokenId = tronHex(token);
-  }
+  constructor(readonly api: TronApi) {}
 
-  async depositAddress(index: number) {
-    return { address: this.keys.account({ kind: "deposit", index }).address, index };
-  }
-
-  async inventoryAddress() {
-    return this.keys.account({ kind: "inventory" }).address;
-  }
-
-  /** `solid`: only solidified (irreversible) blocks. */
-  private async balanceOf(owner: string, solid: boolean): Promise<bigint> {
-    const r = await this.api.post<{ constant_result?: string[]; result?: { result?: boolean; message?: string } }>(
-      `${solid ? "/walletsolidity" : "/wallet"}/triggerconstantcontract`,
-      {
-        owner_address: owner, contract_address: this.token, function_selector: "balanceOf(address)",
-        parameter: pad32(tronHex(owner).slice(1)), visible: true,
-      },
-    );
-    const out = r.constant_result?.[0];
-    if (!out) throw new Error(`tron balanceOf failed: ${JSON.stringify(r.result)}`);
-    return BigInt(`0x${out}`);
-  }
-
-  private async trxBalance(address: string): Promise<bigint> {
+  /** TRX balance in sun. `solid`: only solidified (irreversible) blocks. */
+  async trxBalance(address: string, solid = false): Promise<bigint> {
     // An account that never received TRX is not activated and has no balance field.
-    const r = await this.api.post<{ balance?: number }>("/wallet/getaccount", { address, visible: true });
+    const r = await this.api.post<{ balance?: number }>(`${solid ? "/walletsolidity" : "/wallet"}/getaccount`, { address, visible: true });
     return BigInt(r.balance ?? 0);
   }
 
-  private async chainParams() {
+  async chainParams() {
     if (this.params && Date.now() - this.params.at < 600_000) return this.params;
     const r = await this.api.post<{ chainParameter: { key: string; value?: number }[] }>("/wallet/getchainparameters", {});
     const get = (key: string) => {
@@ -131,44 +95,7 @@ export class TronWallet implements ChainWallet {
     return this.params;
   }
 
-  async getDeposit(address: string): Promise<DepositInfo> {
-    const [seen, confirmed] = await Promise.all([this.balanceOf(address, false), this.balanceOf(address, true)]);
-    return { seen, confirmed, txids: [] };
-  }
-
-  async inventoryBalance(): Promise<bigint> {
-    return this.balanceOf(await this.inventoryAddress(), true);
-  }
-
-  async gasBalance(): Promise<Fee> {
-    return { asset: "TRX", amount: await this.trxBalance(await this.inventoryAddress()) };
-  }
-
-  /** Worst case: energy for a first-time recipient, bandwidth for two txs, activation of a new deposit account. */
-  async estimateSendFee(memo: boolean): Promise<Fee> {
-    if (memo) throw new Error("memo transfers are not supported on Tron");
-    const p = await this.chainParams();
-    return { asset: "TRX", amount: ENERGY_WORST_CASE * p.energyFee + 2n * TX_BYTES * p.bandwidthFee + p.accountFee };
-  }
-
-  private transferData(to: string, amount: bigint): Uint8Array {
-    return Uint8Array.from(Buffer.from(`a9059cbb${pad32(tronHex(to).slice(1))}${uint256(amount)}`, "hex"));
-  }
-
-  /** Energy the transfer would use, simulated by the node. */
-  private async simulateEnergy(owner: string, to: string, amount: bigint): Promise<bigint> {
-    const r = await this.api.post<{ energy_used?: number; result?: { result?: boolean; message?: string } }>(
-      "/wallet/triggerconstantcontract",
-      {
-        owner_address: owner, contract_address: this.token, function_selector: "transfer(address,uint256)",
-        parameter: `${pad32(tronHex(to).slice(1))}${uint256(amount)}`, visible: true,
-      },
-    );
-    if (!r.result?.result || r.energy_used === undefined) throw new Error(`tron transfer simulation failed: ${JSON.stringify(r.result)}`);
-    return BigInt(r.energy_used);
-  }
-
-  private async signAndBroadcast(account: TronAccount, contract: TronContract, feeLimit?: bigint): Promise<string> {
+  async signAndBroadcast(account: TronAccount, contract: TronContract, feeLimit?: bigint): Promise<string> {
     const block = await this.api.post<{ blockID: string; block_header: { raw_data: { number: number; timestamp: number } } }>(
       "/wallet/getnowblock", {},
     );
@@ -195,6 +122,88 @@ export class TronWallet implements ChainWallet {
     }
     return id;
   }
+}
+
+/**
+ * TRC-20 hot wallet (USDT on Tron) over the TronGrid HTTP API.
+ *
+ * Token transfers burn TRX for energy and bandwidth, so before forwarding from a deposit
+ * address we top it up with TRX from the inventory account. Transactions are built,
+ * hashed and signed locally (see tronTx.ts); the node only provides chain data and relays.
+ */
+export class TronWallet implements ChainWallet {
+  readonly chain = "TRON" as const;
+  private tokenId: Uint8Array;
+  private node: TronNode;
+
+  constructor(
+    readonly asset: AssetId,
+    private token: string,
+    private keys: TronKeys,
+    api: TronApi,
+  ) {
+    this.tokenId = tronHex(token);
+    this.node = new TronNode(api);
+  }
+
+  async depositAddress(index: number) {
+    return { address: this.keys.account({ kind: "deposit", index }).address, index };
+  }
+
+  async inventoryAddress() {
+    return this.keys.account({ kind: "inventory" }).address;
+  }
+
+  /** `solid`: only solidified (irreversible) blocks. */
+  private async balanceOf(owner: string, solid: boolean): Promise<bigint> {
+    const r = await this.node.api.post<{ constant_result?: string[]; result?: { result?: boolean; message?: string } }>(
+      `${solid ? "/walletsolidity" : "/wallet"}/triggerconstantcontract`,
+      {
+        owner_address: owner, contract_address: this.token, function_selector: "balanceOf(address)",
+        parameter: pad32(tronHex(owner).slice(1)), visible: true,
+      },
+    );
+    const out = r.constant_result?.[0];
+    if (!out) throw new Error(`tron balanceOf failed: ${JSON.stringify(r.result)}`);
+    return BigInt(`0x${out}`);
+  }
+
+  async getDeposit(address: string): Promise<DepositInfo> {
+    const [seen, confirmed] = await Promise.all([this.balanceOf(address, false), this.balanceOf(address, true)]);
+    return { seen, confirmed, txids: [] };
+  }
+
+  async inventoryBalance(): Promise<bigint> {
+    return this.balanceOf(await this.inventoryAddress(), true);
+  }
+
+  async gasBalance(): Promise<Fee> {
+    return { asset: "TRX", amount: await this.node.trxBalance(await this.inventoryAddress()) };
+  }
+
+  /** Worst case: energy for a first-time recipient, bandwidth for two txs, activation of a new deposit account. */
+  async estimateSendFee(memo: boolean): Promise<Fee> {
+    if (memo) throw new Error("memo transfers are not supported on Tron");
+    const p = await this.node.chainParams();
+    return { asset: "TRX", amount: ENERGY_WORST_CASE * p.energyFee + 2n * TX_BYTES * p.bandwidthFee + p.accountFee };
+  }
+
+  private transferData(to: string, amount: bigint): Uint8Array {
+    return Uint8Array.from(Buffer.from(`a9059cbb${pad32(tronHex(to).slice(1))}${uint256(amount)}`, "hex"));
+  }
+
+  /** Energy the transfer would use, simulated by the node. */
+  private async simulateEnergy(owner: string, to: string, amount: bigint): Promise<bigint> {
+    const r = await this.node.api.post<{ energy_used?: number; result?: { result?: boolean; message?: string } }>(
+      "/wallet/triggerconstantcontract",
+      {
+        owner_address: owner, contract_address: this.token, function_selector: "transfer(address,uint256)",
+        parameter: `${pad32(tronHex(to).slice(1))}${uint256(amount)}`, visible: true,
+      },
+    );
+    if (!r.result?.result || r.energy_used === undefined) throw new Error(`tron transfer simulation failed: ${JSON.stringify(r.result)}`);
+    return BigInt(r.energy_used);
+  }
 
   async send(req: SendRequest): Promise<SendResult> {
     if (req.memo) throw new Error("memo transfers are not supported on Tron");
@@ -204,16 +213,16 @@ export class TronWallet implements ChainWallet {
     if (amount <= 0n) throw new Error("nothing to send");
     if (amount > balance) throw new Error(`insufficient ${this.asset}: have ${balance}, need ${amount}`);
 
-    const p = await this.chainParams();
+    const p = await this.node.chainParams();
     const energy = await this.simulateEnergy(account.address, req.to, amount);
     const burn = (energy * p.energyFee * 12n) / 10n + TX_BYTES * p.bandwidthFee;
-    const trx = await this.trxBalance(account.address);
+    const trx = await this.node.trxBalance(account.address);
     if (trx < burn) {
       if (req.from.kind === "inventory") throw new Error("inventory account has no TRX for energy");
       await this.topUp(account.address, burn - trx);
     }
 
-    const txid = await this.signAndBroadcast(
+    const txid = await this.node.signAndBroadcast(
       account,
       { type: "TriggerSmartContract", owner: account.id, contract: this.tokenId, data: this.transferData(req.to, amount) },
       (burn * 15n) / 10n, // fee_limit: cap on TRX the contract call may burn
@@ -224,15 +233,68 @@ export class TronWallet implements ChainWallet {
   /** Send TRX from the inventory account and wait until the deposit address holds it. */
   private async topUp(to: string, missing: bigint): Promise<void> {
     const inventory = this.keys.account({ kind: "inventory" });
-    const before = await this.trxBalance(to);
+    const before = await this.node.trxBalance(to);
     const amount = (missing * 12n) / 10n;
-    const txid = await this.signAndBroadcast(inventory, { type: "TransferContract", owner: inventory.id, to: tronHex(to), amount });
+    const txid = await this.node.signAndBroadcast(inventory, { type: "TransferContract", owner: inventory.id, to: tronHex(to), amount });
     log.info("tron energy top-up sent", { asset: this.asset, to, amount, txid });
     const deadline = Date.now() + TOPUP_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000));
-      if ((await this.trxBalance(to)) >= before + amount) return;
+      if ((await this.node.trxBalance(to)) >= before + amount) return;
     }
     throw new Error(`tron top-up ${txid} not visible after ${TOPUP_TIMEOUT_MS / 1000}s`);
+  }
+}
+
+/**
+ * Native TRX hot wallet. A plain TRX transfer only uses bandwidth (free for activated accounts,
+ * otherwise burned); sending to an address that was never activated also costs the activation fee.
+ */
+export class TrxWallet implements ChainWallet {
+  readonly chain = "TRON" as const;
+  readonly asset = "TRX" as const;
+  private node: TronNode;
+
+  constructor(
+    private keys: TronKeys,
+    api: TronApi,
+  ) {
+    this.node = new TronNode(api);
+  }
+
+  async depositAddress(index: number) {
+    return { address: this.keys.account({ kind: "deposit", index }).address, index };
+  }
+
+  async inventoryAddress() {
+    return this.keys.account({ kind: "inventory" }).address;
+  }
+
+  async getDeposit(address: string): Promise<DepositInfo> {
+    const [seen, confirmed] = await Promise.all([this.node.trxBalance(address), this.node.trxBalance(address, true)]);
+    return { seen, confirmed, txids: [] };
+  }
+
+  async inventoryBalance(): Promise<bigint> {
+    return this.node.trxBalance(await this.inventoryAddress(), true);
+  }
+
+  /** Bandwidth if it has to be burned, plus activation of a recipient that never held TRX. */
+  async estimateSendFee(memo: boolean): Promise<Fee> {
+    if (memo) throw new Error("memo transfers are not supported on Tron");
+    const p = await this.node.chainParams();
+    return { asset: "TRX", amount: TX_BYTES * p.bandwidthFee + p.accountFee };
+  }
+
+  async send(req: SendRequest): Promise<SendResult> {
+    if (req.memo) throw new Error("memo transfers are not supported on Tron");
+    const account = this.keys.account(req.from);
+    const balance = await this.node.trxBalance(account.address);
+    const { amount: reserve } = await this.estimateSendFee(false);
+    const amount = req.amount === "all" ? balance - reserve : req.amount;
+    if (amount <= 0n) throw new Error("nothing to send after reserving the TRX network fee");
+    if (amount + reserve > balance) throw new Error(`insufficient TRX: have ${balance}, need ${amount + reserve}`);
+    const txid = await this.node.signAndBroadcast(account, { type: "TransferContract", owner: account.id, to: tronHex(req.to), amount });
+    return { txid, amount, fee: reserve };
   }
 }

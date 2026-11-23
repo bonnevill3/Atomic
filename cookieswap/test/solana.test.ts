@@ -4,9 +4,10 @@ import {
   parseTransferCheckedInstruction,
   TOKEN_PROGRAM_ADDRESS,
 } from "@solana-program/token";
+import { parseTransferSolInstruction, SYSTEM_PROGRAM_ADDRESS } from "@solana-program/system";
 import { address, type Blockhash, createSolanaRpc, getBase58Encoder, type SignatureBytes, verifySignature } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-import { slip10Ed25519, SolanaKeys, SplWallet } from "../src/chains/solana";
+import { slip10Ed25519, SolanaKeys, SolWallet, SplWallet } from "../src/chains/solana";
 
 const MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const USDC_MINT = address("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
@@ -92,6 +93,38 @@ describe("SplWallet (@solana/kit)", () => {
 
   it("reports the fee in SOL and refuses memos", async () => {
     expect((await wallet.estimateSendFee(false)).asset).toBe("SOL");
+    await expect(wallet.send({ from: { kind: "deposit", index: 1 }, to: dest, amount: 1n, memo: "m" })).rejects.toThrow(/memo/);
+  });
+});
+
+describe("SolWallet (native SOL)", () => {
+  const keys = new SolanaKeys(MNEMONIC);
+  const wallet = new SolWallet(keys, createSolanaRpc("http://127.0.0.1:1"));
+  const dest = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
+
+  it("builds a system transfer from the deposit key with the inventory paying the fee", async () => {
+    const source = await keys.signer({ kind: "deposit", index: 4 });
+    const payer = await keys.signer({ kind: "inventory" });
+    const { message, transaction } = await wallet.buildTransfer(source, payer, dest, 987_654_321n, LIFETIME);
+    expect(message.feePayer.address).toBe(payer.address);
+    expect(message.instructions).toHaveLength(1);
+    const [ix] = message.instructions;
+    expect(ix.programAddress).toBe(SYSTEM_PROGRAM_ADDRESS);
+    const parsed = parseTransferSolInstruction(ix as Parameters<typeof parseTransferSolInstruction>[0]);
+    expect(parsed.data.amount).toBe(987_654_321n);
+    expect(parsed.accounts.source.address).toBe(source.address);
+    expect(parsed.accounts.destination.address).toBe(dest);
+    expect(Object.keys(transaction.signatures).sort()).toEqual([payer.address, source.address].sort());
+    for (const s of [payer, source]) {
+      const sig = transaction.signatures[s.address] as SignatureBytes;
+      expect(await verifySignature(s.keyPair.publicKey, sig, transaction.messageBytes)).toBe(true);
+    }
+  });
+
+  it("deposit addresses match the SPL wallets' owners, fee is in SOL, memos are refused", async () => {
+    expect((await wallet.depositAddress(5)).address).toBe(keys.address({ kind: "deposit", index: 5 }));
+    expect(await wallet.estimateSendFee(false)).toEqual({ asset: "SOL", amount: 10_000n });
+    await expect(wallet.estimateSendFee(true)).rejects.toThrow(/memo/);
     await expect(wallet.send({ from: { kind: "deposit", index: 1 }, to: dest, amount: 1n, memo: "m" })).rejects.toThrow(/memo/);
   });
 });

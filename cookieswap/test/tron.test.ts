@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { recoverAddress } from "viem";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { base58CheckEncode, isTronAddress } from "../src/assets";
-import { TronApi, tronHex, TronKeys, TronWallet } from "../src/chains/tron";
+import { TronApi, tronHex, TronKeys, TronWallet, TrxWallet } from "../src/chains/tron";
 import { encodeRawTx, txId } from "../src/chains/tronTx";
 import golden from "./fixtures/tron-golden.json";
 
@@ -86,6 +86,7 @@ describe("TronWallet against a fake TronGrid", () => {
 
   let server: Server;
   let wallet: TronWallet;
+  let trxWallet: TrxWallet;
   let trx: Map<string, bigint>;
   let tok: Map<string, bigint>;
   let broadcasts: { type: number; owner: string; signer: string; value: PbField[]; feeLimit?: bigint }[];
@@ -107,7 +108,8 @@ describe("TronWallet against a fake TronGrid", () => {
               { key: "getEnergyFee", value: Number(ENERGY_FEE) }, { key: "getTransactionFee", value: 1000 },
               { key: "getCreateNewAccountFeeInSystemContract", value: 1_000_000 }, { key: "getCreateAccountFee", value: 100_000 },
             ] });
-          case "/wallet/getaccount": {
+          case "/wallet/getaccount":
+          case "/walletsolidity/getaccount": {
             const bal = trx.get(b.address) ?? 0n;
             return json(bal > 0n ? { balance: Number(bal) } : {});
           }
@@ -158,6 +160,7 @@ describe("TronWallet against a fake TronGrid", () => {
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     wallet = new TronWallet("USDT-TRON", USDT, keys, new TronApi(url));
+    trxWallet = new TrxWallet(keys, new TronApi(url));
   });
   afterAll(() => server.close());
   beforeEach(() => {
@@ -190,6 +193,31 @@ describe("TronWallet against a fake TronGrid", () => {
     expect(tok.get(dep.address)).toBe(1_000_000n);
     expect(r.txid).toMatch(/^[0-9a-f]{64}$/);
   }, 20_000);
+
+  it("TrxWallet: native TRX deposits, fee in TRX, sends everything minus the network fee from the deposit key", async () => {
+    trx.set(dep.address, 50_000_000n);
+    const fee = 350n * 1000n + 1_100_000n; // bandwidth burn + activation of a fresh recipient
+    expect(await trxWallet.estimateSendFee(false)).toEqual({ asset: "TRX", amount: fee });
+    await expect(trxWallet.estimateSendFee(true)).rejects.toThrow(/memo/);
+    expect(await trxWallet.getDeposit(dep.address)).toMatchObject({ seen: 50_000_000n, confirmed: 50_000_000n });
+    expect(paths).toContain("/walletsolidity/getaccount");
+
+    const r = await trxWallet.send({ from: { kind: "deposit", index: 7 }, to: DEX, amount: "all" });
+    expect(r).toMatchObject({ amount: 50_000_000n - fee, fee });
+    expect(broadcasts).toHaveLength(1);
+    const [tx] = broadcasts;
+    expect(tx.type).toBe(1); // TransferContract
+    expect(tx.owner).toBe(dep.address);
+    expect(base58CheckEncode(Uint8Array.from([0x41, ...hexb(tx.signer.slice(2))]))).toBe(dep.address);
+    expect(trx.get(DEX)).toBe(50_000_000n - fee);
+  });
+
+  it("TrxWallet refuses sends it cannot pay the fee for", async () => {
+    trx.set(dep.address, 1_000_000n);
+    await expect(trxWallet.send({ from: { kind: "deposit", index: 7 }, to: DEX, amount: "all" })).rejects.toThrow(/nothing to send/);
+    await expect(trxWallet.send({ from: { kind: "deposit", index: 7 }, to: DEX, amount: 900_000n })).rejects.toThrow(/insufficient TRX/);
+    expect(broadcasts).toHaveLength(0);
+  });
 
   it("refuses over-balance sends and memos without broadcasting", async () => {
     await expect(wallet.send({ from: { kind: "deposit", index: 7 }, to: DEX, amount: 300_000_000n })).rejects.toThrow(/insufficient/);

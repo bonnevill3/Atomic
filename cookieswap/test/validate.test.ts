@@ -67,12 +67,62 @@ describe("new stablecoin networks", () => {
     }
   });
   it("lists 11 depositable stablecoins and hides gas-only assets", () => {
-    const stables = Object.values(ASSETS).filter((a) => a.contracts && a.depositable);
+    const stables = Object.values(ASSETS).filter((a) => a.stable && a.depositable);
     expect(stables.map((a) => a.id).sort()).toEqual([
       "DAI-ETH", "USDC-ARB", "USDC-BASE", "USDC-ETH", "USDC-POL", "USDC-SOL",
       "USDT-BSC", "USDT-ETH", "USDT-POL", "USDT-SOL", "USDT-TRON",
     ]);
-    expect(["BNB", "POL", "TRX"].every((id) => !ASSETS[id as keyof typeof ASSETS].listed)).toBe(true);
+    expect(ASSETS.POL.listed).toBe(false);
+  });
+});
+
+describe("top-20 coins", () => {
+  it("lists every top-20 coin and ranks them uniquely", () => {
+    const top = ["BTC", "ETH", "USDT", "BNB", "USDC", "XRP", "SOL", "TRX", "ZEC", "DOGE",
+      "XMR", "LINK", "ADA", "XLM", "DAI", "BCH", "LTC", "UNI", "AVAX", "SUI"];
+    const listed = new Set(Object.values(ASSETS).filter((a) => a.listed).map((a) => a.symbol));
+    expect(top.filter((s) => !listed.has(s))).toEqual([]);
+    const ranks = Object.values(ASSETS).filter((a) => a.rank !== undefined && !a.stable).map((a) => a.rank);
+    expect(new Set(ranks).size).toBe(ranks.length);
+  });
+
+  it("can deposit BNB, AVAX, LINK, UNI, TRX, SOL and LTC; the rest is receive-only", () => {
+    for (const id of ["BNB", "AVAX", "LINK", "UNI", "TRX", "SOL", "LTC"] as const) expect(ASSETS[id].depositable).toBe(true);
+    for (const id of ["XRP", "DOGE", "ADA", "XLM", "BCH", "SUI", "ZEC"] as const) expect(ASSETS[id].depositable).toBe(false);
+  });
+
+  it("marks memo/tag chains so the UI can warn about exchange deposit addresses", () => {
+    expect(ASSETS.XRP.memoWarning).toBe(true);
+    expect(ASSETS.XLM.memoWarning).toBe(true);
+    expect(ASSETS.BTC.memoWarning).toBeFalsy();
+  });
+
+  it("validates receive addresses for the new chains and rejects cross-chain mix-ups", () => {
+    const valid: [keyof typeof ASSETS, string][] = [
+      ["XRP", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"],
+      ["LTC", "ltc1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpq4933p"],
+      ["BCH", "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"],
+      ["BCH", "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"],
+      ["ADA", "addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x"],
+      ["XLM", "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ"],
+      ["SUI", "0x" + "ab".repeat(32)],
+      ["AVAX", "0x52908400098527886E0F7030069857D2E4169EE7"],
+    ];
+    for (const [id, a] of valid) expect(isValidAddress(ASSETS[id].chain, a, "mainnet"), `${id} ${a}`).toBe(true);
+    for (const id of ["XRP", "DOGE", "LTC", "BCH", "ADA", "XLM", "SUI"] as const) {
+      expect(isValidAddress(id, PLACEHOLDER_ADDRESS[id], "mainnet"), id).toBe(true);
+    }
+    const invalid: [keyof typeof ASSETS, string][] = [
+      ["XRP", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTi"], // checksum
+      ["BCH", "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu"], // a BTC address is not a BCH address
+      ["BCH", "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"],
+      ["LTC", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"], // BTC bech32
+      ["DOGE", "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu"],
+      ["XLM", "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGA"],
+      ["ADA", "addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3y"],
+      ["SUI", "0x1234"],
+    ];
+    for (const [id, a] of invalid) expect(isValidAddress(ASSETS[id].chain, a, "mainnet"), `${id} ${a}`).toBe(false);
   });
 });
 

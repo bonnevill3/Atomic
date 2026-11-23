@@ -18,6 +18,7 @@
   "dependencies": {
     "@fastify/rate-limit": "^11.3.0",
     "@fastify/static": "^10.1.12",
+    "@solana-program/system": "^0.16.0",
     "@solana-program/token": "^0.18.0",
     "@solana/kit": "^8.6.0",
     "better-sqlite3": "^13.2.0",
