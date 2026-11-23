@@ -125,6 +125,7 @@ npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throw
 ```
 > The dev token above is public. It only works with mock chains: the server refuses to start live with it.
 > For real use, generate your own with `openssl rand -hex 32`.
+
 Mock mode uses **live DEX quotes and live prices** but simulated deposits and sends.
 For real configs copy `.env.example` to `.env` and run `npm start`.
 
