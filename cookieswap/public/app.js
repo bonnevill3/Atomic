@@ -29,6 +29,108 @@ function assetById(id) {
   return state.assets.find((a) => a.id === id);
 }
 
+/** Basis points -> "1%" / "0.5%". */
+function pct(bps) {
+  return `${(bps / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+}
+
+function usd(n) {
+  return `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+/** Tiny DOM builder: el("p", { class: "x" }, "text", child). Text is always set via textContent. */
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  for (const c of children) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return node;
+}
+
+function listFrom(items, ordered = false) {
+  return el(ordered ? "ol" : "ul", {}, ...items.map((i) => el("li", {}, i)));
+}
+
+function tableFrom(head, rows) {
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ...head.map((h) => el("th", { scope: "col" }, h)))),
+    el("tbody", {}, ...rows.map((r) => el("tr", {}, ...r.map((c) => el("td", {}, c))))));
+}
+
+function faqItem(question, ...body) {
+  return el("details", { class: "faq" }, el("summary", {}, question), el("div", { class: "faq-body" }, ...body));
+}
+
+// ---------------------------------------------------------------- info / FAQ
+function routesText(info) {
+  const r = info.routes;
+  return r.length > 1 ? `${r.slice(0, -1).join(", ")} and ${r[r.length - 1]}` : r.join("");
+}
+
+function minutes(seconds) {
+  return seconds < 90 ? `~${Math.round(seconds)} sec` : `~${Math.round(seconds / 60)} min`;
+}
+
+function renderInfo(info) {
+  const stables = state.assets.filter((a) => a.code);
+  const bySymbol = {};
+  for (const a of stables) (bySymbol[a.symbol] ||= []).push(a.network);
+  const sendCoins = state.assets.filter((a) => a.canSend && !a.code).map((a) => a.symbol);
+  const receiveOnly = state.assets.filter((a) => !a.canSend).map((a) => a.symbol);
+  const stableNames = Object.keys(bySymbol).join(", ").replace(/, ([^,]*)$/, " or $1");
+
+  $("tagline").textContent =
+    `Swap ${sendCoins.join(", ")} and stablecoins on ${stables.length} networks. Every quote compares ${routesText(info)} and uses the best rate. No account needed.`;
+
+  const feeRows = [
+    ["Every swap", pct(info.fees.swapBps)],
+    [`Receiving ${stableNames}`, pct(info.fees.stablePayoutBps)],
+  ];
+  if (info.fees.inventorySpreadBps > 0) feeRows.push(["Swaps paid from our XMR inventory (spread)", `+${pct(info.fees.inventorySpreadBps)}`]);
+  feeRows.push(["Network fee", "Gas to forward your deposit, shown in your quote"]);
+  feeRows.push(["Exchange costs", "Already included in the rate you see"]);
+
+  const faq = $("faq");
+  faq.replaceChildren(
+    faqItem("How does it work?", listFrom([
+      "Choose what you send and what you want to receive. You get a live quote with the rate, our fee, the network fee, the minimum you receive and the estimated time.",
+      "Enter your receive address, and a refund address on the network you send from.",
+      `Send exactly the shown amount to your one-time deposit address within ${info.depositWindowMinutes} minutes.`,
+      "When your deposit is confirmed, we swap it through the best route and send the result straight to your address.",
+    ], true)),
+    faqItem("What does it cost?",
+      tableFrom(["", "Fee"], feeRows),
+      el("p", {}, "Our fee is taken from your deposit and shown in every quote. There are no other fees.")),
+    faqItem("How long does it take?",
+      tableFrom(["Network you send on", "We wait for", "Typical wait"],
+        info.networks.map((n) => [n.network, n.confirmations, minutes(n.typicalSeconds)])),
+      el("p", {}, `After that the swap itself usually takes a few minutes, depending on the route. Swaps above ${usd(info.limits.manualReviewUsd)} take longer, because we check them by hand first.`)),
+    faqItem("Are there limits?", listFrom([
+      `Minimum about ${usd(info.limits.minUsd)}, maximum about ${usd(info.limits.maxUsd)} per swap.`,
+      `Swaps above ${usd(info.limits.manualReviewUsd)} are checked by hand after your deposit confirms, before they run.`,
+      "Some routes have their own minimum, such as USDT on Tron through NEAR Intents. If your amount is too small, the quote tells you.",
+    ])),
+    faqItem("What if something goes wrong?", listFrom([
+      `If the rate gets more than ${pct(info.maxRateDriftBps)} worse before your deposit confirms, we refund you instead of swapping.`,
+      "If no route is available, or a deposit fails our checks, we send it back to your refund address, minus the network fee.",
+      `A deposit that arrives after the ${info.depositWindowMinutes}-minute window is reviewed by hand.`,
+      "Tokens sent on the wrong network may not be recoverable. Always check the network shown on the deposit screen.",
+    ])),
+    faqItem("Do you hold my funds?",
+      el("p", {}, "Yes, for the duration of the swap. cookieswap is a custodial service: your deposit goes to an address we control and stays there until it is swapped or refunded. We don't issue wrapped tokens, and we keep our hot wallet balances small.")),
+    faqItem("What do you store about me?",
+      el("p", {}, `No account and no IP addresses. An order only holds what's needed to complete it: addresses, amounts and transaction ids. Finished orders are deleted after ${info.retentionDays} days. Your order link contains a private key, so anyone with the link can see that order's status.`)),
+    faqItem("Which coins and networks are supported?",
+      listFrom([
+        `Send and receive: ${sendCoins.join(", ")}.`,
+        ...Object.entries(bySymbol).map(([sym, nets]) => `${sym} on ${nets.join(", ")}.`),
+        ...(receiveOnly.length ? [`Receive only: ${receiveOnly.join(", ")}.`] : []),
+      ])),
+    faqItem("Which exchanges do you use?",
+      el("p", {}, `Every quote compares ${routesText(info)} and picks the one that gives you the most. Monero is paid from our own inventory, because no decentralized exchange lists native XMR right now.`)),
+  );
+  $("info").hidden = false;
+}
+
 // ---------------------------------------------------------------- swap form
 function fillSelects() {
   const from = $("from");
@@ -82,13 +184,20 @@ async function getQuote() {
     const b = q.best;
     $("out").textContent = fmt(b.amountOut);
     const fs = symbolOf(from);
-    $("q-rate").textContent = `1 ${fs} ≈ ${fmt(b.rate, 6)} ${symbolOf(to)}`;
-    $("q-route").textContent = b.route;
+    const ts = symbolOf(to);
+    $("q-rate").textContent = `1 ${fs} ≈ ${fmt(b.rate, 6)} ${ts}`;
+    $("q-fee-label").textContent = `Our fee (${pct(b.feeBps)}${b.spreadBps ? ` + ${pct(b.spreadBps)} spread` : ""})`;
     $("q-fee").textContent = `${fmt(b.serviceFee)} ${fs}`;
     $("q-netfee").textContent = `${fmt(b.networkFee)} ${fs}`;
     $("q-netfee-row").hidden = Number(b.networkFee) === 0;
+    $("q-min").textContent = `${fmt(b.minAmountOut)} ${ts}`;
+    $("q-route").textContent = b.routeName;
     $("q-eta").textContent = eta(b.etaSeconds);
     $("quote").hidden = false;
+    if (state.info) {
+      $("q-note").textContent = `Rates aren't locked. We check the rate again when your deposit confirms. If it is more than ${pct(state.info.maxRateDriftBps)} worse than this quote, you get a refund instead.`;
+      $("q-note").hidden = false;
+    }
     $("q-review").textContent = `Orders above $${state.health.manualReviewUsd} are checked by hand after your deposit confirms, before the swap runs. This can add some time.`;
     $("q-review").hidden = !b.manualReview;
     state.lastQuote = b;
@@ -96,6 +205,7 @@ async function getQuote() {
     if (seq !== state.quoteSeq) return;
     $("out").textContent = "—";
     $("quote").hidden = true;
+    $("q-note").hidden = true;
     $("q-review").hidden = true;
     $("quote-error").textContent = e.message;
     $("quote-error").hidden = false;
@@ -198,7 +308,7 @@ function renderOrder(o) {
   const out = o.amountOut || o.quotedOut;
   $("o-out").textContent = `${o.amountOut ? "" : "≈ "}${fmt(out)} ${symbolOf(o.to)} (${o.toNetwork})`;
   $("o-recipient").textContent = o.recipient;
-  $("o-route").textContent = o.route;
+  $("o-route").textContent = o.routeName;
   $("o-id").textContent = o.id;
   $("o-payout-row").hidden = !o.payoutTxid;
   $("o-payout").textContent = o.payoutTxid || "";
@@ -224,7 +334,8 @@ async function simulateDeposit() {
 
 // ---------------------------------------------------------------- boot
 async function boot() {
-  [state.assets, state.health] = await Promise.all([api("/api/assets"), api("/api/health")]);
+  [state.assets, state.health, state.info] = await Promise.all([api("/api/assets"), api("/api/health"), api("/api/info")]);
+  renderInfo(state.info);
   const badges = $("badges");
   const badge = (text, warn) => {
     const s = document.createElement("span");

@@ -15,7 +15,11 @@ export interface RoutePlan {
   to: Asset;
   /** Gross amount the user deposits. */
   amountIn: bigint;
+  /** Our fee rate: SERVICE_FEE_BPS, or STABLE_PAYOUT_FEE_BPS when `to` is a stablecoin. */
+  feeBps: number;
   serviceFee: bigint;
+  /** Extra inventory spread applied on top of the oracle price (inventory legs only). */
+  spreadBps: number;
   /** Estimated fee for forwarding the deposit (dex routes), in `from` units. */
   forwardFee: bigint;
   amountOut: bigint;
@@ -40,7 +44,7 @@ export interface PlanInput {
 }
 
 /** Rough deposit confirmation time per chain, for ETA display. */
-const CONFIRM_SECONDS = {
+export const CONFIRM_SECONDS = {
   BTC: 1200, ETH: 160, BSC: 45, POL: 150, BASE: 60, ARB: 30, TRON: 60, SOL: 15, XMR: 1200, ZEC: 300,
 } as const;
 /** Bridge asset for XMR deposits paid out via a DEX. */
@@ -61,7 +65,8 @@ export class Router {
     if (!from.depositable || !this.wallets[from.id]) throw new QuoteError(`${from.symbol} deposits are not supported`);
     await this.checkLimits(input);
 
-    const serviceFee = bpsOf(input.amountIn, this.cfg.SERVICE_FEE_BPS);
+    const feeBps = this.feeBps(to);
+    const serviceFee = bpsOf(input.amountIn, feeBps);
     const attempts: Promise<RoutePlan>[] = [];
     const xmrInvolved = from.id === "XMR" || to.id === "XMR";
 
@@ -79,6 +84,11 @@ export class Router {
       throw new QuoteError(reasons.find((r) => !r.includes("not supported")) ?? "no route available for this pair");
     }
     return plans.sort((a, b) => (b.amountOut > a.amountOut ? 1 : b.amountOut < a.amountOut ? -1 : 0));
+  }
+
+  /** Receiving a stablecoin costs STABLE_PAYOUT_FEE_BPS; every other swap SERVICE_FEE_BPS. */
+  feeBps(to: Asset): number {
+    return to.stable ? this.cfg.STABLE_PAYOUT_FEE_BPS : this.cfg.SERVICE_FEE_BPS;
   }
 
   async best(input: PlanInput): Promise<RoutePlan> {
@@ -108,7 +118,7 @@ export class Router {
   private async dexRoute(dex: DexProvider, input: PlanInput, serviceFee: bigint): Promise<RoutePlan> {
     if (!(await dex.supports(input.from, input.to))) throw new QuoteError(`${dex.name}: pair not supported`);
     const wallet = this.wallets[input.from.id]!;
-    const forwardFee = await this.feeIn(await wallet.estimateSendFee(dex.name === "thorchain"), input.from);
+    const forwardFee = await this.feeIn(await wallet.estimateSendFee(dex.usesMemo), input.from);
     const net = input.amountIn - serviceFee - forwardFee;
     if (net <= 0n) throw new QuoteError("amount too small to cover fees");
     const q = await dex.quote({
@@ -121,7 +131,7 @@ export class Router {
     });
     return {
       kind: "dex", label: dex.name, from: input.from, to: input.to,
-      amountIn: input.amountIn, serviceFee, forwardFee,
+      amountIn: input.amountIn, feeBps: this.feeBps(input.to), serviceFee, spreadBps: 0, forwardFee,
       amountOut: q.amountOut, minAmountOut: q.minAmountOut,
       etaSeconds: CONFIRM_SECONDS[input.from.chain] + q.etaSeconds,
       dex: q,
@@ -141,7 +151,7 @@ export class Router {
     await this.requireInventory(to, out);
     return {
       kind: "inventory", label: "inventory", from, to,
-      amountIn: input.amountIn, serviceFee, forwardFee: 0n,
+      amountIn: input.amountIn, feeBps: this.feeBps(to), serviceFee, spreadBps: this.cfg.INVENTORY_SPREAD_BPS, forwardFee: 0n,
       amountOut: out, minAmountOut: out,
       etaSeconds: CONFIRM_SECONDS[from.chain] + 120,
     };
@@ -175,7 +185,7 @@ export class Router {
     if (!best) throw new QuoteError(`no DEX route from ${BRIDGE.symbol} to ${to.symbol}`);
     return {
       kind: "inventory_dex", label: `inventory → ${best.provider}`, from, to,
-      amountIn: input.amountIn, serviceFee, forwardFee: 0n,
+      amountIn: input.amountIn, feeBps: this.feeBps(to), serviceFee, spreadBps: this.cfg.INVENTORY_SPREAD_BPS, forwardFee: 0n,
       amountOut: best.amountOut, minAmountOut: best.minAmountOut,
       etaSeconds: CONFIRM_SECONDS[from.chain] + best.etaSeconds,
       dex: best, bridgeAsset: BRIDGE, bridgeAmount,

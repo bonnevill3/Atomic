@@ -15,6 +15,8 @@
   </header>
 
   <main>
+    <p id="tagline" class="tagline"></p>
+
     <!-- Swap form -->
     <section id="swap" class="card" aria-labelledby="swap-title">
       <h1 id="swap-title">Swap</h1>
@@ -40,12 +42,14 @@
       </label>
 
       <dl id="quote" class="quote" hidden>
-        <div><dt>Rate</dt><dd id="q-rate"></dd></div>
-        <div><dt>Route</dt><dd id="q-route"></dd></div>
-        <div><dt>Service fee</dt><dd id="q-fee"></dd></div>
+        <div><dt>Rate (after fees)</dt><dd id="q-rate"></dd></div>
+        <div><dt id="q-fee-label">Our fee</dt><dd id="q-fee"></dd></div>
         <div id="q-netfee-row"><dt>Network fee</dt><dd id="q-netfee"></dd></div>
+        <div><dt>Minimum you receive</dt><dd id="q-min"></dd></div>
+        <div><dt>Route</dt><dd id="q-route"></dd></div>
         <div><dt>Estimated time</dt><dd id="q-eta"></dd></div>
       </dl>
+      <p id="q-note" class="fine" hidden></p>
       <p id="q-review" class="notice" hidden></p>
       <p id="quote-error" class="error" role="alert" hidden></p>
 
@@ -59,7 +63,7 @@
       </label>
 
       <button id="create" class="primary" type="button" disabled>Create swap</button>
-      <p class="fine">Custodial service: during a swap your funds are held by this service until they are swapped or refunded. Rates are estimates; the final amount depends on the rate when your deposit confirms.</p>
+      <p class="fine">cookieswap is custodial: we hold your deposit until it is swapped or refunded. Fees, timing and refunds are explained below.</p>
     </section>
 
     <!-- Order status -->
@@ -102,6 +106,12 @@
         <button id="simulate" type="button" class="ghost">Simulate full deposit</button>
         <p id="dev-msg" class="fine"></p>
       </details>
+    </section>
+
+    <!-- Info / FAQ (filled from /api/info so it always matches the live configuration) -->
+    <section id="info" class="info" aria-labelledby="info-title" hidden>
+      <h2 id="info-title">How cookieswap works</h2>
+      <div id="faq"></div>
     </section>
   </main>
 </body>

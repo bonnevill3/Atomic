@@ -1,8 +1,11 @@
 import type { Asset } from "../assets";
 import { fetchJson, HttpError } from "../log";
 import { applyBps, rescale } from "../money";
-import { type DexProvider, type DexQuote, type DexQuoteInput, type DexRef, type DexStatus, providerMessage, QuoteError } from "./types";
+import {
+  type DexName, type DexProvider, type DexQuote, type DexQuoteInput, type DexRef, type DexStatus, providerMessage, QuoteError,
+} from "./types";
 
+/** Asset amounts in the THORChain-family APIs always use 8 decimals. */
 const THOR_DECIMALS = 8;
 
 interface Pool { asset: string; status: string }
@@ -16,27 +19,41 @@ interface ThorQuote {
   inbound_confirmation_seconds?: number;
   outbound_delay_seconds?: number;
   total_swap_seconds?: number;
-  fees: { slippage_bps: number; total_bps: number };
 }
 
+/** THORChain and its fork Maya Protocol share the same node API; they differ in name, path and asset ids. */
+export interface ThorFlavor {
+  name: Extract<DexName, "thorchain" | "maya">;
+  /** URL path segment of the node API ("thorchain" / "mayachain"). */
+  path: string;
+  assetId: (a: Asset) => string | undefined;
+}
+
+export const THORCHAIN: ThorFlavor = { name: "thorchain", path: "thorchain", assetId: (a) => a.thorchain };
+export const MAYA: ThorFlavor = { name: "maya", path: "mayachain", assetId: (a) => a.maya };
+
 /**
- * THORChain: native cross-chain AMM. We send the deposit to the vault ("inbound address")
- * with a swap memo; THORChain pays the user directly from its vaults.
+ * Native cross-chain AMM (THORChain or Maya). We send the deposit to the vault ("inbound
+ * address") with a swap memo; the network pays the user directly from its vaults.
  */
 export class ThorchainProvider implements DexProvider {
-  readonly name = "thorchain" as const;
+  readonly name: ThorFlavor["name"];
+  readonly usesMemo = true;
   private meta?: { pools: Set<string>; haltedChains: Set<string>; at: number };
 
   constructor(
     private api: string,
     private slippageBps: number,
-  ) {}
+    private flavor: ThorFlavor = THORCHAIN,
+  ) {
+    this.name = flavor.name;
+  }
 
   private async metadata() {
     if (this.meta && Date.now() - this.meta.at < 60_000) return this.meta;
     const [pools, inbound] = await Promise.all([
-      fetchJson<Pool[]>(`${this.api}/thorchain/pools`),
-      fetchJson<Inbound[]>(`${this.api}/thorchain/inbound_addresses`),
+      fetchJson<Pool[]>(`${this.api}/${this.flavor.path}/pools`),
+      fetchJson<Inbound[]>(`${this.api}/${this.flavor.path}/inbound_addresses`),
     ]);
     this.meta = {
       pools: new Set(pools.filter((p) => p.status === "Available").map((p) => p.asset)),
@@ -49,7 +66,9 @@ export class ThorchainProvider implements DexProvider {
   }
 
   async supports(from: Asset, to: Asset): Promise<boolean> {
-    if (!from.thorchain || !to.thorchain) return false;
+    const fromId = this.flavor.assetId(from);
+    const toId = this.flavor.assetId(to);
+    if (!fromId || !toId) return false;
     // Native XMR deposits need a memo in tx_extra, which monero-wallet-rpc cannot set.
     if (from.chain === "XMR") return false;
     // ERC-20 deposits need approve + router.depositWithExpiry; our token wallet only does plain transfers.
@@ -57,10 +76,7 @@ export class ThorchainProvider implements DexProvider {
     try {
       const m = await this.metadata();
       const chainOf = (a: string) => a.split(".")[0];
-      return (
-        m.pools.has(from.thorchain) && m.pools.has(to.thorchain) &&
-        !m.haltedChains.has(chainOf(from.thorchain)) && !m.haltedChains.has(chainOf(to.thorchain))
-      );
+      return m.pools.has(fromId) && m.pools.has(toId) && !m.haltedChains.has(chainOf(fromId)) && !m.haltedChains.has(chainOf(toId));
     } catch {
       return false;
     }
@@ -69,26 +85,27 @@ export class ThorchainProvider implements DexProvider {
   async quote(input: DexQuoteInput): Promise<DexQuote> {
     const amount = rescale(input.amountIn, input.from.decimals, THOR_DECIMALS);
     const params = new URLSearchParams({
-      from_asset: input.from.thorchain!,
-      to_asset: input.to.thorchain!,
+      from_asset: this.flavor.assetId(input.from)!,
+      to_asset: this.flavor.assetId(input.to)!,
       amount: amount.toString(),
       streaming_interval: "1",
       streaming_quantity: "0",
       liquidity_tolerance_bps: String(this.slippageBps),
     });
     if (input.recipient) params.set("destination", input.recipient);
-    if (input.refundTo) params.set("refund_address", input.refundTo);
+    // No refund_address: refunds go to the sending address, which is already ours (the order's
+    // deposit address or inventory). An explicit one also pushes BTC memos past the 80-byte OP_RETURN limit.
     let q: ThorQuote;
     try {
-      q = await fetchJson<ThorQuote>(`${this.api}/thorchain/quote/swap?${params}`);
+      q = await fetchJson<ThorQuote>(`${this.api}/${this.flavor.path}/quote/swap?${params}`);
     } catch (e) {
-      throw new QuoteError(e instanceof HttpError ? providerMessage("thorchain", e.body) : `thorchain: unavailable`);
+      throw new QuoteError(e instanceof HttpError ? providerMessage(this.name, e.body) : `${this.name}: unavailable`);
     }
     if (q.recommended_min_amount_in && amount < BigInt(q.recommended_min_amount_in)) {
-      throw new QuoteError("thorchain: amount below recommended minimum");
+      throw new QuoteError(`${this.name}: amount below recommended minimum`);
     }
     const out = rescale(BigInt(q.expected_amount_out), THOR_DECIMALS, input.to.decimals);
-    if (!input.dry && (!q.inbound_address || !q.memo)) throw new QuoteError("thorchain: quote without inbound/memo");
+    if (!input.dry && (!q.inbound_address || !q.memo)) throw new QuoteError(`${this.name}: quote without inbound/memo`);
     return {
       provider: this.name,
       amountIn: input.amountIn,
@@ -108,11 +125,12 @@ export class ThorchainProvider implements DexProvider {
       stages?: { swap_status?: { pending: boolean }; outbound_signed?: { completed: boolean } };
     };
     try {
-      s = await fetchJson(`${this.api}/thorchain/tx/status/${hash}`);
+      s = await fetchJson(`${this.api}/${this.flavor.path}/tx/status/${hash}`);
     } catch (e) {
       if (e instanceof HttpError && e.status === 404) return { state: "pending" };
       throw e;
     }
+    // Unknown/unobserved txs come back without out_txs (Maya answers 200, THORChain 404).
     const out = s.out_txs?.[0];
     if (!out) return { state: "pending" };
     if (out.memo?.toUpperCase().startsWith("REFUND")) return { state: "refunded", detail: out.memo };

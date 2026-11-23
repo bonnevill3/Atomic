@@ -40,7 +40,8 @@ export function staticSource(prices: Partial<Record<AssetId, number>>): PriceSou
 export function testConfig(overrides: Record<string, string> = {}): Config {
   return loadConfig({
     CHAINS: "mock", DB_PATH: ":memory:", ENGINE_INTERVAL_SECONDS: "1", SERVICE_FEE_BPS: "50",
-    INVENTORY_SPREAD_BPS: "100", MAX_RATE_DRIFT_BPS: "200", MANUAL_REVIEW_USD: "1000000", ...overrides,
+    INVENTORY_SPREAD_BPS: "100", STABLE_PAYOUT_FEE_BPS: "200", MAX_RATE_DRIFT_BPS: "200", MANUAL_REVIEW_USD: "1000000",
+    ...overrides,
   } as NodeJS.ProcessEnv);
 }
 
@@ -66,6 +67,7 @@ export function setup(prices: Partial<Record<AssetId, number>> = { ...TEST_PRICE
 /** Scriptable DEX: quotes at a fixed rate, status controlled by the test. */
 export class FakeDex implements DexProvider {
   readonly name = "near" as const;
+  readonly usesMemo = false;
   status_: DexStatus = { state: "pending" };
   quotes: DexQuoteInput[] = [];
 

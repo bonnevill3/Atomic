@@ -119,3 +119,24 @@ button { font: inherit; cursor: pointer; }
   .row input, .row .out { font-size: 18px; }
   .steps { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---- intro line + info / FAQ ---------------------------------------------- */
+.tagline { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+.info { margin-top: 24px; }
+.info h2 { font-size: 18px; margin: 0 0 8px; }
+.faq { border-top: 1px solid var(--border); }
+.faq:last-child { border-bottom: 1px solid var(--border); }
+.faq summary {
+  cursor: pointer; list-style: none; padding: 14px 4px; font-weight: 600;
+  display: flex; justify-content: space-between; gap: 12px;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; color: var(--muted); font-weight: 400; }
+.faq[open] summary::after { content: "−"; }
+.faq-body { padding: 0 4px 14px; font-size: 14px; color: var(--text); }
+.faq-body p { margin: 8px 0 0; }
+.faq-body ul, .faq-body ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.faq-body table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.faq-body th, .faq-body td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.faq-body th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.faq-body td:last-child { color: var(--muted); }

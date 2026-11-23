@@ -1,6 +1,6 @@
 # cookieswap
 
-**cookieswap** is a **custodial instant swap** in the style of wagyu.xyz, but without relaying orders to ChangeNOW or a similar exchange API. Routes run **through DEXes** (THORChain, NEAR Intents), and an **XMR inventory leg** fills the gap where no DEX supports Monero.
+**cookieswap** is a **custodial instant swap** in the style of wagyu.xyz, but without relaying orders to ChangeNOW or a similar exchange API. Routes run **through DEXes**: THORChain, Maya Protocol and NEAR Intents, with the best quote winning per order. An **XMR inventory leg** fills the gap where no DEX supports Monero.
 
 > **Status: prototype.** Tested with mock chains, live DEX quotes, and live read-only chain access. Nothing has been broadcast on mainnet yet.
 >
@@ -16,8 +16,9 @@ user ──▶ one-time deposit address (our hot wallet, per order)
    │ dex                │ inventory                    │ inventory_dex            │
    │ BTC/ETH → non-XMR  │ anything ⇄ XMR (BTC/ETH)     │ XMR → SOL/USDC/ZEC/…     │
    │ deposit forwarded  │ we pay out from our own      │ XMR stays with us, our   │
-   │ to THORChain vault │ inventory at oracle price    │ ETH inventory goes into  │
-   │ (memo) or 1Click   │ − spread                     │ a DEX that pays the user │
+   │ to THORChain/Maya  │ inventory at oracle price    │ ETH inventory goes into  │
+   │ vault (memo) or    │ (+ optional spread)          │ a DEX that pays the user │
+   │ 1Click address     │                              │                          │
    │ deposit address    │                              │                          │
    └─────────┬──────────┴───────────────┬──────────────┴────────────┬─────────────┘
              ▼                          ▼                           ▼
@@ -25,6 +26,29 @@ user ──▶ one-time deposit address (our hot wallet, per order)
 ```
 
 The router asks every route for a quote and picks the one with the **highest output**.
+
+### Fees
+| What | Default | Config |
+|---|---|---|
+| Every swap | **1%** of the deposit | `SERVICE_FEE_BPS=100` |
+| Swaps where the user **receives a stablecoin** (USDT/USDC/DAI, incl. stable → stable) | **2%** | `STABLE_PAYOUT_FEE_BPS=200` |
+| Extra spread on XMR inventory legs | **0%**, so the fee above is the whole markup | `INVENTORY_SPREAD_BPS` |
+| Network fee | the gas to forward the deposit, at cost | shown separately in every quote |
+
+- The fee is taken from the deposit before routing.
+- DEX costs (pool fees, solver spread) are part of the DEX quote, so they're already in the rate.
+- If you set an inventory spread, the quote shows it next to the fee ("Our fee (1% + 0.5% spread)"). It is never hidden.
+
+### What the swap page shows (modelled on wagyu.xyz's information, with our own facts)
+- **Quote:**
+  - rate after fees, our fee with its percentage, network fee
+  - **minimum you receive** (the DEX slippage limit), route by name (THORChain / Maya Protocol / NEAR Intents / cookieswap inventory), estimated time
+  - a note that rates aren't locked and that a move of more than `MAX_RATE_DRIFT_BPS` against the user becomes a refund
+- **FAQ section**, filled from `GET /api/info` so it always matches the running config:
+  - how it works, what it costs (fee table), how long it takes (per network, from the confirmation settings)
+  - limits and the manual review, what happens when something goes wrong
+  - custody, stated plainly: we hold the deposit during the swap
+  - what data is stored, supported networks, and which exchanges are compared
 
 ### Stablecoin deposits: 11 networks
 I picked the networks by circulating supply (DefiLlama, 23 Nov 2026), keeping only those a DEX route supports:
@@ -69,23 +93,25 @@ These are the decentralized XMR venues as of 23 Nov 2026:
 
 So XMR is paid from your own inventory, priced from an oracle: the median of Kraken and CoinGecko. Quotes are refused if the two sources disagree. The THORChain provider **switches XMR on automatically** once an `XMR.XMR` pool is `Available`. Until then, rebalance inventory by hand or through the eigenwallet fork in this repo (see [Next steps](#next-steps)).
 
-### Routes with a live quote (re-checked 23 Nov 2026)
-These are **quotes**, run with mock chains and dry-run. Nothing has been sent on mainnet.
+### Routes with a live quote (re-checked 23 Nov 2026, 3 DEXes)
+These are **quotes**, run with mock chains and dry-run; nothing has been sent on mainnet. The winner changes from minute to minute, which is why every order compares all routes again.
 
-| From \ To | BTC | ETH | XMR | SOL | ZEC | stables |
-|---|---|---|---|---|---|---|
-| **BTC** | | near | inventory | near | near | near (all 11) |
-| **ETH** | near | | inventory | near | near (alt: thorchain) | thorchain/near |
-| **XMR** | inventory | inventory | | inventory → near | inventory → near | inventory → thorchain/near |
-| **10 stables** (all except USDT-TRON), $100 | near | near | inventory | near | near | near |
-| **USDT-TRON**, $150 | near | near | inventory | near | near | near |
+| Pair (≈$120) | Winner | Others quoting |
+|---|---|---|
+| BTC → ETH / USDC / USDT / ZEC | NEAR Intents | Maya, within ~0.1–0.3% |
+| ETH → BTC | **Maya** (+1.2–2.2% vs NEAR) | NEAR |
+| ETH → USDC / USDT (Ethereum) | **Maya** | NEAR, THORChain |
+| ETH → ZEC, ETH → USDC on Arbitrum | Maya or NEAR (they swap places) | THORChain |
+| ETH → SOL, stables → crypto | NEAR Intents | — |
+| anything ⇄ XMR | cookieswap inventory | — |
+| XMR → USDC | inventory → Maya | — |
+| XMR → SOL / ZEC | inventory → NEAR | — |
 
 Notes:
-- **51 of 55** stable-deposit pairs quoted at $100. The 4 misses were USDT-TRON → BTC/ETH/SOL/ZEC, which is NEAR's $100 minimum. At $150 those work too.
-- THORChain had **BTC and BASE halted** at the time of the check.
-- THORChain has **no XMR pool**, and NEAR Intents does not list XMR, so all XMR legs use inventory.
-
-Deposits are possible in **BTC, ETH, XMR and the 11 stablecoins**. SOL and ZEC are payout-only (the DEX pays the user).
+- At the time of the check, THORChain had **BTC and BASE halted**. Maya's BTC was live.
+- No DEX lists native XMR (THORChain has no XMR pool, and neither NEAR nor Maya lists XMR), so XMR legs use inventory.
+- Deposits are possible in **BTC, ETH, XMR and the 11 stablecoins**. SOL and ZEC are payout-only.
+- Every order is quoted on **every** route again when the deposit confirms.
 
 ## Quick start (development, no funds)
 ```bash
@@ -93,7 +119,7 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 67 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
+npm test            # 76 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
@@ -105,7 +131,7 @@ For real configs copy `.env.example` to `.env` and run `npm start`.
 |---|---|
 | `src/server.ts` | Fastify API and static UI. Logger off and no IPs stored. Rate limits, CSP, per-order secret token. |
 | `src/router.ts` | Quotes every route, applies service fee/spread/limits, picks the best one |
-| `src/providers/thorchain.ts` | Pools/halts, `quote/swap` (inbound address + memo), `tx/status` |
+| `src/providers/thorchain.ts` | THORChain **and Maya** (same node API, `ThorFlavor`): pools/halts, `quote/swap` (inbound address + memo), `tx/status` |
 | `src/providers/nearIntents.ts` | 1Click `quote` (deposit address), `deposit/submit`, `status` |
 | `src/oracle.ts` | Median USD price (Kraken, CoinGecko) with a deviation guard |
 | `src/engine.ts` | Order state machine, see below |
@@ -200,6 +226,8 @@ Running this for the public without a licence is not legal there. Get legal advi
 - **THORChain XMR as input.** Monero deposits to THORChain need the memo in `tx_extra`, which `monero-wallet-rpc` cannot set. A custom signer is needed.
 - **Cheaper Tron forwards.** Stake TRX for energy, or rent it, instead of burning ~15 TRX per USDT forward.
 - **Remaining networks.** Arbitrum-USDT and Hyperliquid-USDC, once a DEX route or wallet type exists.
-- **THORChain for token deposits.** Add `approve` + `router.depositWithExpiry`, so stable deposits can also use THORChain pools.
+- **Chainflip** as a fourth route. It uses deposit channels like NEAR and has native BTC/ETH/SOL and stables. Its quoting API was down for maintenance on 23 Nov 2026; add it once it is back.
+- **THORChain/Maya for token deposits.** Add `approve` + `router.depositWithExpiry`, so stable deposits can also use their pools. Maya often has the best stable rates.
+- **Arbitrum USDT** via Maya (it has an `ARB.USDT` pool), once token deposits through the router exist.
 - **More deposit coins.** SOL and ZEC deposit wallets, Lightning.
 - **Affiliate fees.** THORChain affiliate memo and 1Click `appFees`, instead of deducting the fee before forwarding.

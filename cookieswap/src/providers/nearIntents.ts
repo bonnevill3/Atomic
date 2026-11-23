@@ -20,6 +20,7 @@ interface QuoteResponse {
  */
 export class NearIntentsProvider implements DexProvider {
   readonly name = "near" as const;
+  readonly usesMemo = false;
   private tokens?: { ids: Set<string>; at: number };
 
   constructor(

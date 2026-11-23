@@ -1,6 +1,6 @@
 import type { Asset } from "../assets";
 
-export type DexName = "thorchain" | "near";
+export type DexName = "thorchain" | "maya" | "near";
 
 export interface DexQuoteInput {
   from: Asset;
@@ -44,6 +44,8 @@ export interface DexRef {
 
 export interface DexProvider {
   name: DexName;
+  /** Deposits carry a swap memo (THORChain/Maya); otherwise a plain transfer to a deposit address (NEAR). */
+  usesMemo: boolean;
   /** Cheap check from cached metadata (pools / token lists). */
   supports(from: Asset, to: Asset): Promise<boolean>;
   quote(input: DexQuoteInput): Promise<DexQuote>;

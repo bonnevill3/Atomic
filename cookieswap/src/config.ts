@@ -47,14 +47,22 @@ const schema = z.object({
   NEAR_1CLICK_URL: z.string().default("https://1click.chaindefuser.com"),
   /** Optional 1Click JWT (lower fees / higher limits). */
   NEAR_1CLICK_JWT: z.string().optional(),
+  /** Maya Protocol: THORChain fork with the same API (native BTC, ETH, ARB, ZEC, USDC/USDT). */
+  MAYA_API_URL: z.string().default("https://mayanode.mayachain.info"),
   ENABLE_THORCHAIN: bool.default(true),
+  ENABLE_MAYA: bool.default(true),
   ENABLE_NEAR: bool.default(true),
   ENABLE_INVENTORY: bool.default(true),
 
-  /** Service fee taken from every deposit, in basis points (100 = 1%). */
-  SERVICE_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(50),
-  /** Extra spread on inventory (XMR) legs on top of the oracle mid price. */
-  INVENTORY_SPREAD_BPS: z.coerce.number().int().min(0).max(1000).default(100),
+  /** Our fee on every swap, taken from the deposit, in basis points (100 = 1%). */
+  SERVICE_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(100),
+  /** Our fee when the user receives a stablecoin (USDT/USDC/DAI) instead of SERVICE_FEE_BPS. */
+  STABLE_PAYOUT_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
+  /**
+   * Optional extra spread on inventory (XMR) legs on top of the oracle mid price. Default 0, so the
+   * advertised fee is the whole markup; it is shown separately in quotes when set.
+   */
+  INVENTORY_SPREAD_BPS: z.coerce.number().int().min(0).max(1000).default(0),
   /** Slippage tolerance passed to the DEX. */
   SLIPPAGE_BPS: z.coerce.number().int().min(1).max(1000).default(100),
   /** If the re-quote at execution is worse than the order quote by more than this, refund instead. */

@@ -6,7 +6,7 @@ import { Engine } from "./engine";
 import { log } from "./log";
 import { PriceOracle } from "./oracle";
 import { NearIntentsProvider } from "./providers/nearIntents";
-import { ThorchainProvider } from "./providers/thorchain";
+import { MAYA, ThorchainProvider } from "./providers/thorchain";
 import type { DexName, DexProvider } from "./providers/types";
 import { Router } from "./router";
 import { DenylistScreening } from "./screening";
@@ -21,11 +21,12 @@ async function main() {
   // DEX routes only exist on mainnet (THORChain / NEAR Intents have no public testnet).
   const dexes: Partial<Record<DexName, DexProvider>> = {};
   if (cfg.NETWORK === "mainnet" && cfg.ENABLE_THORCHAIN) dexes.thorchain = new ThorchainProvider(cfg.THORCHAIN_API_URL, cfg.SLIPPAGE_BPS);
+  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_MAYA) dexes.maya = new ThorchainProvider(cfg.MAYA_API_URL, cfg.SLIPPAGE_BPS, MAYA);
   if (cfg.NETWORK === "mainnet" && cfg.ENABLE_NEAR) dexes.near = new NearIntentsProvider(cfg.NEAR_1CLICK_URL, cfg.SLIPPAGE_BPS, cfg.NEAR_1CLICK_JWT);
 
   const router = new Router(cfg, oracle, Object.values(dexes), wallets);
   const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE), oracle);
-  const app = await buildServer(cfg, db, router, wallets, oracle);
+  const app = await buildServer(cfg, db, router, wallets, oracle, Object.keys(dexes));
 
   await app.listen({ port: cfg.PORT, host: cfg.HOST });
   engine.start();

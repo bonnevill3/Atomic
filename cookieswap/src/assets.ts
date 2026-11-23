@@ -53,7 +53,10 @@ export interface Asset {
   inventory: boolean;
   /** Offered to users (false for gas-only assets). */
   listed: boolean;
+  /** Stablecoin (USDT/USDC/DAI): receiving one costs STABLE_PAYOUT_FEE_BPS. */
+  stable: boolean;
   thorchain?: string;
+  maya?: string;
   near?: string;
   kraken?: string;
   coingecko?: string;
@@ -68,36 +71,36 @@ function stable(
 ): Asset {
   return {
     id, symbol, name, chain, network, decimals, contracts: { mainnet },
-    depositable: true, inventory: false, listed: true, near, ...price, ...extra,
+    depositable: true, inventory: false, listed: true, stable: true, near, ...price, ...extra,
   };
 }
 
 export const ASSETS: Record<AssetId, Asset> = {
   BTC: {
     id: "BTC", symbol: "BTC", name: "Bitcoin", chain: "BTC", network: "Bitcoin", decimals: 8,
-    depositable: true, inventory: true, listed: true,
-    thorchain: "BTC.BTC", near: "nep141:btc.omft.near", kraken: "XBTUSD", coingecko: "bitcoin",
+    depositable: true, inventory: true, listed: true, stable: false,
+    thorchain: "BTC.BTC", maya: "BTC.BTC", near: "nep141:btc.omft.near", kraken: "XBTUSD", coingecko: "bitcoin",
   },
   ETH: {
     id: "ETH", symbol: "ETH", name: "Ethereum", chain: "ETH", network: "Ethereum", decimals: 18,
-    depositable: true, inventory: true, listed: true,
-    thorchain: "ETH.ETH", near: "nep141:eth.omft.near", kraken: "ETHUSD", coingecko: "ethereum",
+    depositable: true, inventory: true, listed: true, stable: false,
+    thorchain: "ETH.ETH", maya: "ETH.ETH", near: "nep141:eth.omft.near", kraken: "ETHUSD", coingecko: "ethereum",
   },
   XMR: {
     id: "XMR", symbol: "XMR", name: "Monero", chain: "XMR", network: "Monero", decimals: 12,
-    depositable: true, inventory: true, listed: true,
+    depositable: true, inventory: true, listed: true, stable: false,
     // THORChain announced native XMR; the provider only uses it once an XMR.XMR pool is live.
     thorchain: "XMR.XMR", kraken: "XMRUSD", coingecko: "monero",
   },
   SOL: {
     id: "SOL", symbol: "SOL", name: "Solana", chain: "SOL", network: "Solana", decimals: 9,
-    depositable: false, inventory: false, listed: true,
+    depositable: false, inventory: false, listed: true, stable: false,
     near: "nep141:sol.omft.near", kraken: "SOLUSD", coingecko: "solana",
   },
   ZEC: {
     id: "ZEC", symbol: "ZEC", name: "Zcash", chain: "ZEC", network: "Zcash", decimals: 8,
-    depositable: false, inventory: false, listed: true,
-    thorchain: "ZEC.ZEC", near: "nep141:zec.omft.near", kraken: "ZECUSD", coingecko: "zcash",
+    depositable: false, inventory: false, listed: true, stable: false,
+    thorchain: "ZEC.ZEC", maya: "ZEC.ZEC", near: "nep141:zec.omft.near", kraken: "ZECUSD", coingecko: "zcash",
   },
 
   // --- USDT: the 5 largest networks by supply that a DEX route supports (Arbitrum-USDT has none) ---
@@ -106,7 +109,7 @@ export const ASSETS: Record<AssetId, Asset> = {
     { thorchain: "TRON.USDT-TR7NHQJEKQXGTCI8Q8ZY4PL8OTSZGJLJ6T" }),
   "USDT-ETH": stable("USDT-ETH", "USDT", "Tether USD", "ETH", "Ethereum (ERC-20)", 6,
     "0xdAC17F958D2ee523a2206206994597C13D831ec7", "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near", USDT_PRICE,
-    { thorchain: "ETH.USDT-0XDAC17F958D2EE523A2206206994597C13D831EC7" }),
+    { thorchain: "ETH.USDT-0XDAC17F958D2EE523A2206206994597C13D831EC7", maya: "ETH.USDT-0XDAC17F958D2EE523A2206206994597C13D831EC7" }),
   "USDT-BSC": stable("USDT-BSC", "USDT", "Tether USD", "BSC", "BNB Smart Chain (BEP-20)", 18,
     "0x55d398326f99059fF775485246999027B3197955", "nep141:bnb-0x55d398326f99059ff775485246999027b3197955.omdep.near", USDT_PRICE,
     { thorchain: "BSC.USDT-0X55D398326F99059FF775485246999027B3197955" }),
@@ -124,6 +127,7 @@ export const ASSETS: Record<AssetId, Asset> = {
         testnet: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Circle's Sepolia USDC
       },
       thorchain: "ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48",
+      maya: "ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48",
     }),
   "USDC-SOL": stable("USDC-SOL", "USDC", "USD Coin", "SOL", "Solana (SPL)", 6,
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near", USDC_PRICE),
@@ -131,7 +135,8 @@ export const ASSETS: Record<AssetId, Asset> = {
     "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", USDC_PRICE,
     { thorchain: "BASE.USDC-0X833589FCD6EDB6E08F4C7C32D4F71B54BDA02913" }),
   "USDC-ARB": stable("USDC-ARB", "USDC", "USD Coin", "ARB", "Arbitrum One", 6,
-    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near", USDC_PRICE),
+    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near", USDC_PRICE,
+    { maya: "ARB.USDC-0XAF88D065E77C8CC2239327C5EDB3A432268E5831" }),
   "USDC-POL": stable("USDC-POL", "USDC", "USD Coin", "POL", "Polygon PoS", 6,
     "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near", USDC_PRICE),
 
@@ -143,15 +148,15 @@ export const ASSETS: Record<AssetId, Asset> = {
   // --- gas-only (fee pricing) ---
   BNB: {
     id: "BNB", symbol: "BNB", name: "BNB", chain: "BSC", network: "BNB Smart Chain", decimals: 18,
-    depositable: false, inventory: false, listed: false, kraken: "BNBUSD", coingecko: "binancecoin",
+    depositable: false, inventory: false, listed: false, stable: false, kraken: "BNBUSD", coingecko: "binancecoin",
   },
   POL: {
     id: "POL", symbol: "POL", name: "Polygon", chain: "POL", network: "Polygon PoS", decimals: 18,
-    depositable: false, inventory: false, listed: false, kraken: "POLUSD", coingecko: "polygon-ecosystem-token",
+    depositable: false, inventory: false, listed: false, stable: false, kraken: "POLUSD", coingecko: "polygon-ecosystem-token",
   },
   TRX: {
     id: "TRX", symbol: "TRX", name: "Tron", chain: "TRON", network: "Tron", decimals: 6,
-    depositable: false, inventory: false, listed: false, kraken: "TRXUSD", coingecko: "tron",
+    depositable: false, inventory: false, listed: false, stable: false, kraken: "TRXUSD", coingecko: "tron",
   },
 };
 

@@ -16,7 +16,7 @@ import { OracleError } from "./oracle";
 import { usdValue } from "./money";
 import { QuoteError } from "./providers/types";
 import type { PriceOracle } from "./oracle";
-import type { RoutePlan, Router } from "./router";
+import { CONFIRM_SECONDS, type RoutePlan, type Router } from "./router";
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest();
 
@@ -46,11 +46,22 @@ function asset(id: string): Asset {
   return a;
 }
 
+/** Display names for route labels like "near" or "inventory → maya". */
+const ROUTE_NAMES: Record<string, string> = {
+  near: "NEAR Intents", thorchain: "THORChain", maya: "Maya Protocol", inventory: "cookieswap inventory",
+};
+export function routeName(label: string): string {
+  return label.split(" → ").map((p) => ROUTE_NAMES[p] ?? p).join(" → ");
+}
+
 function quoteView(p: RoutePlan, manualReview: boolean) {
   const rate = Number(fromAtomic(p.amountOut, p.to)) / Number(fromAtomic(p.amountIn, p.from));
   return {
     manualReview,
     route: p.label,
+    routeName: routeName(p.label),
+    feeBps: p.feeBps,
+    spreadBps: p.spreadBps,
     kind: p.kind,
     amountIn: fromAtomic(p.amountIn, p.from),
     amountOut: fromAtomic(p.amountOut, p.to),
@@ -87,6 +98,7 @@ function orderView(o: OrderRow) {
     amountOut: fmt(o.amount_out, to),
     recipient: o.recipient,
     route: o.provider,
+    routeName: routeName(o.provider),
     payoutTxid: o.payout_txid,
     refundTxid: o.refund_txid,
     expiresAt: o.expires_at,
@@ -96,7 +108,9 @@ function orderView(o: OrderRow) {
 
 const EVM_CHAIN_ID: Record<string, number> = { ETH: 1, BSC: 56, POL: 137, BASE: 8453, ARB: 42161 };
 
-export async function buildServer(cfg: Config, db: Db, router: Router, wallets: Wallets, oracle: PriceOracle): Promise<FastifyInstance> {
+export async function buildServer(
+  cfg: Config, db: Db, router: Router, wallets: Wallets, oracle: PriceOracle, dexNames: string[],
+): Promise<FastifyInstance> {
   // Logger off on purpose: no request logs, no IP addresses stored anywhere.
   const app = Fastify({ logger: false, trustProxy: false, bodyLimit: 16 * 1024 });
 
@@ -120,6 +134,29 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
   app.get("/api/health", async () => ({
     ok: true, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN, manualReviewUsd: cfg.MANUAL_REVIEW_USD,
   }));
+
+  /** Everything the info section shows, derived from the live config so the page never drifts from reality. */
+  app.get("/api/info", async () => {
+    const conf: Record<string, string> = {
+      BTC: `${cfg.BTC_CONFIRMATIONS} confirmations`, ETH: `${cfg.ETH_CONFIRMATIONS} confirmations`,
+      BSC: `${cfg.BSC_CONFIRMATIONS} confirmations`, POL: `${cfg.POL_CONFIRMATIONS} confirmations`,
+      BASE: `${cfg.BASE_CONFIRMATIONS} confirmations`, ARB: `${cfg.ARB_CONFIRMATIONS} confirmations`,
+      XMR: `${cfg.XMR_CONFIRMATIONS} confirmations`, TRON: "solidified block", SOL: "finalized",
+    };
+    const networks = [...new Map(
+      Object.values(ASSETS).filter((a) => a.listed && a.depositable && wallets[a.id])
+        .map((a) => [a.chain, { chain: a.chain, network: a.network.replace(/ \(.*\)$/, ""), confirmations: conf[a.chain], typicalSeconds: CONFIRM_SECONDS[a.chain] }]),
+    ).values()];
+    return {
+      fees: { swapBps: cfg.SERVICE_FEE_BPS, stablePayoutBps: cfg.STABLE_PAYOUT_FEE_BPS, inventorySpreadBps: cfg.INVENTORY_SPREAD_BPS },
+      limits: { minUsd: cfg.MIN_ORDER_USD, maxUsd: cfg.MAX_ORDER_USD, manualReviewUsd: cfg.MANUAL_REVIEW_USD },
+      depositWindowMinutes: cfg.ORDER_TTL_MINUTES,
+      maxRateDriftBps: cfg.MAX_RATE_DRIFT_BPS,
+      retentionDays: cfg.RETENTION_DAYS,
+      routes: dexNames.map(routeName),
+      networks,
+    };
+  });
 
   /** Indicative only: the binding check runs on the confirmed deposit in the engine. */
   const needsReview = async (amountIn: bigint, from: Asset) =>
