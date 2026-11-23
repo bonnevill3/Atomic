@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Atomic Swap</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo" aria-hidden="true">◆</span> Atomic Swap</div>
+    <div id="badges" class="badges"></div>
+  </header>
+
+  <main>
+    <!-- Swap form -->
+    <section id="swap" class="card" aria-labelledby="swap-title">
+      <h1 id="swap-title">Swap</h1>
+
+      <label class="field">
+        <span class="label">You send</span>
+        <div class="row">
+          <input id="amount" inputmode="decimal" autocomplete="off" placeholder="0.0" aria-label="Amount to send">
+          <select id="from" aria-label="Asset to send"></select>
+        </div>
+      </label>
+
+      <button id="flip" class="flip" type="button" aria-label="Swap direction" title="Swap direction">⇅</button>
+
+      <label class="field">
+        <span class="label">You receive (estimated)</span>
+        <div class="row">
+          <output id="out" class="out" aria-live="polite">—</output>
+          <select id="to" aria-label="Asset to receive"></select>
+        </div>
+      </label>
+
+      <dl id="quote" class="quote" hidden>
+        <div><dt>Rate</dt><dd id="q-rate"></dd></div>
+        <div><dt>Route</dt><dd id="q-route"></dd></div>
+        <div><dt>Service fee</dt><dd id="q-fee"></dd></div>
+        <div><dt>Estimated time</dt><dd id="q-eta"></dd></div>
+      </dl>
+      <p id="quote-error" class="error" role="alert" hidden></p>
+
+      <label class="field">
+        <span class="label" id="recipient-label">Receive address</span>
+        <input id="recipient" autocomplete="off" spellcheck="false" placeholder="Your address on the receiving chain">
+      </label>
+      <label class="field">
+        <span class="label" id="refund-label">Refund address</span>
+        <input id="refund" autocomplete="off" spellcheck="false" placeholder="Where we refund if the swap fails">
+      </label>
+
+      <button id="create" class="primary" type="button" disabled>Create swap</button>
+      <p class="fine">Custodial service: during a swap your funds are held by this service until they are swapped or refunded. Rates are estimates; the final amount depends on the rate when your deposit confirms.</p>
+    </section>
+
+    <!-- Order status -->
+    <section id="order" class="card" aria-labelledby="order-title" hidden>
+      <h1 id="order-title">Your swap</h1>
+
+      <div id="deposit-box" class="deposit">
+        <p>Send exactly <strong id="d-amount"></strong> to:</p>
+        <div class="addr-row">
+          <code id="d-address" class="addr"></code>
+          <button id="copy" type="button" class="ghost">Copy</button>
+        </div>
+        <img id="qr" class="qr" alt="QR code of the deposit address" width="180" height="180">
+        <p class="fine">Expires in <span id="d-expiry"></span>. A deposit after expiry is reviewed manually.</p>
+      </div>
+
+      <ol id="steps" class="steps">
+        <li data-step="awaiting_deposit">Awaiting deposit</li>
+        <li data-step="confirming">Confirming</li>
+        <li data-step="processing">Swapping</li>
+        <li data-step="completed">Completed</li>
+      </ol>
+      <p id="o-status" class="status" role="status"></p>
+
+      <dl class="quote">
+        <div><dt>You receive</dt><dd id="o-out"></dd></div>
+        <div><dt>To</dt><dd id="o-recipient" class="mono"></dd></div>
+        <div><dt>Route</dt><dd id="o-route"></dd></div>
+        <div><dt>Order ID</dt><dd id="o-id" class="mono"></dd></div>
+        <div id="o-payout-row" hidden><dt>Payout tx</dt><dd id="o-payout" class="mono"></dd></div>
+        <div id="o-refund-row" hidden><dt>Refund tx</dt><dd id="o-refund" class="mono"></dd></div>
+      </dl>
+      <p class="fine">Bookmark this page to keep tracking your swap. The link contains your private order key; don't share it.</p>
+      <button id="new" type="button" class="ghost">New swap</button>
+
+      <details id="dev" class="dev" hidden>
+        <summary>Developer: simulate deposit (mock chains)</summary>
+        <input id="admin-token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off">
+        <button id="simulate" type="button" class="ghost">Simulate full deposit</button>
+        <p id="dev-msg" class="fine"></p>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

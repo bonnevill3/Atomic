@@ -1,0 +1,179 @@
+import { ASSETS, type Asset, PLACEHOLDER_ADDRESS } from "./assets";
+import type { Wallets } from "./chains/types";
+import type { Config } from "./config";
+import type { RouteKind } from "./db";
+import { log } from "./log";
+import { applyBps, bpsOf, convertByPrice, usdValue } from "./money";
+import type { PriceOracle } from "./oracle";
+import { type DexProvider, type DexQuote, QuoteError } from "./providers/types";
+
+export interface RoutePlan {
+  kind: RouteKind;
+  /** Human-readable route, e.g. "thorchain", "inventory", "inventory → near". */
+  label: string;
+  from: Asset;
+  to: Asset;
+  /** Gross amount the user deposits. */
+  amountIn: bigint;
+  serviceFee: bigint;
+  /** Estimated fee for forwarding the deposit (dex routes), in `from` units. */
+  forwardFee: bigint;
+  amountOut: bigint;
+  minAmountOut: bigint;
+  etaSeconds: number;
+  dex?: DexQuote;
+  /** inventory_dex: inventory asset we feed into the DEX and how much of it. */
+  bridgeAsset?: Asset;
+  bridgeAmount?: bigint;
+}
+
+export interface PlanInput {
+  from: Asset;
+  to: Asset;
+  amountIn: bigint;
+  /** User payout address; a placeholder is used for indicative quotes. */
+  recipient?: string;
+  /** Where a DEX should refund to. Executions pass the order's deposit address so refunds land where we sweep from. */
+  refundTo?: string;
+  /** Non-dry quotes reserve DEX deposit instructions; only used right before executing. */
+  dry: boolean;
+}
+
+/** Rough deposit confirmation time per chain, for ETA display. */
+const CONFIRM_SECONDS = { BTC: 1200, ETH: 160, XMR: 1200, SOL: 1, ZEC: 300 } as const;
+/** Bridge asset for XMR deposits paid out via a DEX. */
+const BRIDGE: Asset = ASSETS.ETH;
+
+export class Router {
+  constructor(
+    private cfg: Config,
+    private oracle: PriceOracle,
+    private dexes: DexProvider[],
+    private wallets: Wallets,
+  ) {}
+
+  /** All viable routes, best first. Throws QuoteError when none is possible. */
+  async plan(input: PlanInput): Promise<RoutePlan[]> {
+    const { from, to } = input;
+    if (from.id === to.id) throw new QuoteError("from and to must differ");
+    if (!from.depositable || !this.wallets[from.chain]) throw new QuoteError(`${from.symbol} deposits are not supported`);
+    await this.checkLimits(input);
+
+    const serviceFee = bpsOf(input.amountIn, this.cfg.SERVICE_FEE_BPS);
+    const attempts: Promise<RoutePlan>[] = [];
+    const xmrInvolved = from.id === "XMR" || to.id === "XMR";
+
+    if (this.cfg.ENABLE_INVENTORY && xmrInvolved && to.inventory) attempts.push(this.inventoryRoute(input, serviceFee));
+    if (this.cfg.ENABLE_INVENTORY && from.id === "XMR" && !to.inventory) attempts.push(this.inventoryDexRoute(input, serviceFee));
+    if (from.chain !== "XMR") {
+      for (const dex of this.dexes) attempts.push(this.dexRoute(dex, input, serviceFee));
+    }
+
+    const settled = await Promise.allSettled(attempts);
+    const plans = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+    if (plans.length === 0) {
+      const reasons = settled.flatMap((s) => (s.status === "rejected" ? [String(s.reason?.message ?? s.reason)] : []));
+      log.info("no route", { from: from.id, to: to.id, reasons });
+      throw new QuoteError(reasons.find((r) => !r.includes("not supported")) ?? "no route available for this pair");
+    }
+    return plans.sort((a, b) => (b.amountOut > a.amountOut ? 1 : b.amountOut < a.amountOut ? -1 : 0));
+  }
+
+  async best(input: PlanInput): Promise<RoutePlan> {
+    return (await this.plan(input))[0];
+  }
+
+  private async checkLimits(input: PlanInput): Promise<void> {
+    const p = await this.oracle.price(input.from);
+    const usd = usdValue(input.amountIn, input.from, p.usd);
+    if (usd < this.cfg.MIN_ORDER_USD) throw new QuoteError(`minimum is about $${this.cfg.MIN_ORDER_USD}`);
+    if (usd > this.cfg.MAX_ORDER_USD) throw new QuoteError(`maximum is about $${this.cfg.MAX_ORDER_USD}`);
+  }
+
+  private recipientFor(input: PlanInput): string {
+    return input.recipient ?? PLACEHOLDER_ADDRESS[input.to.chain];
+  }
+
+  /** Deposit (minus fees) is forwarded to a DEX, which pays the user directly. */
+  private async dexRoute(dex: DexProvider, input: PlanInput, serviceFee: bigint): Promise<RoutePlan> {
+    if (!(await dex.supports(input.from, input.to))) throw new QuoteError(`${dex.name}: pair not supported`);
+    const wallet = this.wallets[input.from.chain]!;
+    const forwardFee = await wallet.estimateSendFee(dex.name === "thorchain");
+    const net = input.amountIn - serviceFee - forwardFee;
+    if (net <= 0n) throw new QuoteError("amount too small to cover fees");
+    const q = await dex.quote({
+      from: input.from,
+      to: input.to,
+      amountIn: net,
+      recipient: this.recipientFor(input),
+      refundTo: input.refundTo ?? (await wallet.inventoryAddress()),
+      dry: input.dry,
+    });
+    return {
+      kind: "dex", label: dex.name, from: input.from, to: input.to,
+      amountIn: input.amountIn, serviceFee, forwardFee,
+      amountOut: q.amountOut, minAmountOut: q.minAmountOut,
+      etaSeconds: CONFIRM_SECONDS[input.from.chain] + q.etaSeconds,
+      dex: q,
+    };
+  }
+
+  /** We pay `to` from our own inventory at the oracle price minus spread. */
+  private async inventoryRoute(input: PlanInput, serviceFee: bigint): Promise<RoutePlan> {
+    const { from, to } = input;
+    const wallet = this.wallets[to.chain];
+    if (!wallet) throw new QuoteError(`no ${to.symbol} wallet`);
+    const [pf, pt] = await Promise.all([this.oracle.price(from), this.oracle.price(to)]);
+    const gross = convertByPrice(input.amountIn - serviceFee, from, pf.usd, to, pt.usd);
+    const payoutFee = await wallet.estimateSendFee(false);
+    const out = applyBps(gross, this.cfg.INVENTORY_SPREAD_BPS) - payoutFee;
+    if (out <= 0n) throw new QuoteError("amount too small to cover fees");
+    await this.requireInventory(to, out);
+    return {
+      kind: "inventory", label: "inventory", from, to,
+      amountIn: input.amountIn, serviceFee, forwardFee: 0n,
+      amountOut: out, minAmountOut: out,
+      etaSeconds: CONFIRM_SECONDS[from.chain] + 120,
+    };
+  }
+
+  /** XMR in, then our ETH inventory goes through a DEX to the user (e.g. XMR → SOL). */
+  private async inventoryDexRoute(input: PlanInput, serviceFee: bigint): Promise<RoutePlan> {
+    const { from, to } = input;
+    const ethWallet = this.wallets.ETH;
+    if (!ethWallet) throw new QuoteError("no ETH inventory wallet");
+    const [pf, pb] = await Promise.all([this.oracle.price(from), this.oracle.price(BRIDGE)]);
+    const forwardFee = await ethWallet.estimateSendFee(true);
+    const bridgeAmount =
+      applyBps(convertByPrice(input.amountIn - serviceFee, from, pf.usd, BRIDGE, pb.usd), this.cfg.INVENTORY_SPREAD_BPS) - forwardFee;
+    if (bridgeAmount <= 0n) throw new QuoteError("amount too small to cover fees");
+    await this.requireInventory(BRIDGE, bridgeAmount + forwardFee);
+
+    let best: DexQuote | undefined;
+    for (const dex of this.dexes) {
+      if (!(await dex.supports(BRIDGE, to))) continue;
+      try {
+        const q = await dex.quote({
+          from: BRIDGE, to, amountIn: bridgeAmount,
+          recipient: this.recipientFor(input), refundTo: await ethWallet.inventoryAddress(), dry: input.dry,
+        });
+        if (!best || q.amountOut > best.amountOut) best = q;
+      } catch (e) {
+        log.debug("bridge dex quote failed", { dex: dex.name, err: String(e) });
+      }
+    }
+    if (!best) throw new QuoteError(`no DEX route from ${BRIDGE.symbol} to ${to.symbol}`);
+    return {
+      kind: "inventory_dex", label: `inventory → ${best.provider}`, from, to,
+      amountIn: input.amountIn, serviceFee, forwardFee: 0n,
+      amountOut: best.amountOut, minAmountOut: best.minAmountOut,
+      etaSeconds: CONFIRM_SECONDS[from.chain] + best.etaSeconds,
+      dex: best, bridgeAsset: BRIDGE, bridgeAmount,
+    };
+  }
+
+  private async requireInventory(asset: Asset, amount: bigint): Promise<void> {
+    const bal = await this.wallets[asset.chain]!.inventoryBalance();
+    if (bal < amount) throw new QuoteError(`insufficient ${asset.symbol} liquidity`);
+  }
+}
