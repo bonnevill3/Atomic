@@ -75,3 +75,11 @@ describe("new stablecoin networks", () => {
     expect(["BNB", "POL", "TRX"].every((id) => !ASSETS[id as keyof typeof ASSETS].listed)).toBe(true);
   });
 });
+
+describe("config safety", () => {
+  it("refuses the public dev admin token on real chains, but allows it with mock chains", async () => {
+    const { loadConfig, DEV_ADMIN_TOKEN } = await import("../src/config");
+    expect(() => loadConfig({ CHAINS: "live", MNEMONIC: "x", ADMIN_TOKEN: DEV_ADMIN_TOKEN } as NodeJS.ProcessEnv)).toThrow(/public dev token/);
+    expect(loadConfig({ CHAINS: "mock", ADMIN_TOKEN: DEV_ADMIN_TOKEN } as NodeJS.ProcessEnv).ADMIN_TOKEN).toBe(DEV_ADMIN_TOKEN);
+  });
+});

@@ -85,6 +85,9 @@ const schema = z.object({
 
 export type Config = z.infer<typeof schema> & { mnemonic?: string };
 
+/** The admin token printed in the README for local testing. It is public, so it is refused on real chains. */
+export const DEV_ADMIN_TOKEN = "dev-admin-token-0123456789abcdef";
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
@@ -94,6 +97,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (cfg.MNEMONIC_FILE) cfg.mnemonic = readFileSync(cfg.MNEMONIC_FILE, "utf8").trim();
   else if (cfg.MNEMONIC) cfg.mnemonic = cfg.MNEMONIC.trim();
 
+  if (cfg.CHAINS === "live" && cfg.ADMIN_TOKEN === DEV_ADMIN_TOKEN) {
+    throw new Error("ADMIN_TOKEN is the public dev token from the README; generate your own, e.g. `openssl rand -hex 32`");
+  }
   if (cfg.CHAINS === "live" && !cfg.mnemonic) {
     throw new Error("CHAINS=live requires MNEMONIC_FILE (or MNEMONIC)");
   }

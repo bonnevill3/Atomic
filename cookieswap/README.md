@@ -123,6 +123,8 @@ npm test            # 76 tests: engine, review gate, stablecoin flows, BTC/ERC-2
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
+> The dev token above is public. It only works with mock chains: the server refuses to start live with it.
+> For real use, generate your own with `openssl rand -hex 32`.
 Mock mode uses **live DEX quotes and live prices** but simulated deposits and sends.
 For real configs copy `.env.example` to `.env` and run `npm start`.
 
