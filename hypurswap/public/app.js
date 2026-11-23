@@ -42,11 +42,17 @@ function fillSelects() {
   updateLabels();
 }
 
+function onNetwork(a) {
+  return a.token ? `${a.name} on ${a.network}` : a.name;
+}
+
 function updateLabels() {
   const f = assetById($("from").value);
   const t = assetById($("to").value);
-  $("recipient-label").textContent = `Receive address (${t.name})`;
-  $("refund-label").textContent = `Refund address (${f.name})`;
+  $("from-network").textContent = `Network: ${f.network}`;
+  $("to-network").textContent = `Network: ${t.network}`;
+  $("recipient-label").textContent = `Receive address (${onNetwork(t)})`;
+  $("refund-label").textContent = `Refund address (${onNetwork(f)})`;
 }
 
 let quoteTimer = null;
@@ -163,6 +169,11 @@ function renderOrder(o) {
   $("deposit-box").hidden = o.status !== "awaiting_deposit";
   $("d-amount").textContent = `${fmt(o.depositAmount)} ${o.from}`;
   $("d-address").textContent = o.depositAddress;
+  const from = assetById(o.from);
+  $("d-network").textContent = from && from.token
+    ? `Only send ${o.from} on ${o.fromNetwork}. Tokens sent on another network cannot be recovered.`
+    : `Network: ${o.fromNetwork}`;
+  $("d-network").className = from && from.token ? "notice" : "fine";
   const left = Math.max(0, o.expiresAt - Date.now());
   $("d-expiry").textContent = `${Math.floor(left / 60000)} min`;
 

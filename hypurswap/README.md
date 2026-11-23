@@ -26,6 +26,20 @@ user ──▶ one-time deposit address (our hot wallet, per order)
 
 The router asks every route for a quote and picks the one with the **highest output**.
 
+### Stablecoin deposits (USDC / USDT on Ethereum)
+Users can **send USDC or USDT (ERC-20)** and receive BTC, ETH, XMR, SOL, ZEC or the other stable.
+- **Deposit addresses:** each order gets its own deposit address from the ETH key tree, shared with ETH orders.
+  The UI shows the network and warns that tokens sent on another network cannot be recovered.
+  The QR code is an EIP-681 token transfer.
+- **Gas:** a deposit address only holds tokens, so before forwarding, hypurswap **tops up gas from the ETH inventory**.
+  It waits for that top-up to confirm, then sends the tokens.
+  The gas (top-up + transfer) is quoted in ETH and charged to the user in token units at the oracle price.
+- **Routes:**
+  - stable → BTC/ETH/SOL/ZEC/other stable: via NEAR Intents (plain token transfer to the 1Click deposit address)
+  - stable → XMR: paid from inventory, and the stables are consolidated into your ETH inventory address
+- **THORChain:** not used for token *deposits*. That needs `approve` + `router.depositWithExpiry`, which is not built yet.
+  THORChain is still used for payouts *in* USDC/USDT.
+
 ### Safety net: manual review above $500
 When a deposit is confirmed and has passed screening, hypurswap values it in USD (oracle price at that moment).
 If it is worth **more than `MANUAL_REVIEW_USD` (default $500)**:
@@ -51,18 +65,20 @@ So XMR is paid from your own inventory, priced from an oracle: the median of Kra
 ### Routes with a live quote (re-checked 23 Nov 2026, ~$100 per pair)
 These are **quotes**, run with mock chains and dry-run. Nothing has been sent on mainnet.
 
-| From \ To | BTC | ETH | USDC | XMR | SOL | ZEC |
-|---|---|---|---|---|---|---|
-| **BTC** | | near | near | inventory | near | near |
-| **ETH** | near | | thorchain (alt: near) | inventory | near | near (alt: thorchain) |
-| **XMR** | inventory | inventory | inventory → thorchain | | inventory → near | inventory → near |
+| From \ To | BTC | ETH | USDC | USDT | XMR | SOL | ZEC |
+|---|---|---|---|---|---|---|---|
+| **BTC** | | near | near | near | inventory | near | near |
+| **ETH** | near | | thorchain (alt: near) | thorchain (alt: near) | inventory | near | near (alt: thorchain) |
+| **USDC** | near | near | | near | inventory | near | near |
+| **USDT** | near | near | near | | inventory | near | near |
+| **XMR** | inventory | inventory | inventory → thorchain | inventory → thorchain | | inventory → near | inventory → near |
 
 At the time of the check:
 - THORChain had **BTC and BASE halted**, so BTC legs ran via NEAR.
 - THORChain had **no XMR pool**, and NEAR Intents (232 tokens) does not list XMR.
 - All XMR legs therefore use inventory.
 
-Deposits are possible in **BTC, ETH and XMR**. USDC, SOL and ZEC are payout-only (the DEX pays the user).
+Deposits are possible in **BTC, ETH, USDC, USDT (ERC-20) and XMR**. SOL and ZEC are payout-only (the DEX pays the user).
 
 ## Quick start (development, no funds)
 ```bash
@@ -87,7 +103,8 @@ For real configs copy `.env.example` to `.env` and run `npm start`.
 | `src/oracle.ts` | Median USD price (Kraken, CoinGecko) with a deviation guard |
 | `src/engine.ts` | Order state machine, see below |
 | `src/chains/btc.ts` | BIP84 HD deposit addresses, Esplora, PSBT signing (vault, OP_RETURN memo, change) |
-| `src/chains/evm.ts` | HD accounts via viem; THORChain memo goes in tx `data` |
+| `src/chains/evm.ts` | Shared RPC + HD accounts via viem; THORChain memo goes in tx `data` |
+| `src/chains/erc20.ts` | USDC/USDT: `balanceOf` deposits, gas top-up from ETH inventory, then `transfer` |
 | `src/chains/xmr.ts` | `monero-wallet-rpc`: a subaddress per order, inventory = subaddress 0 |
 | `src/chains/mock.ts` | Mock chains and the `DryRunWallet` decorator |
 | `src/screening.ts` | Screening hook (denylist; plug in a sanctions/analytics provider) |
@@ -125,7 +142,10 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
    - Keep only working float on it and sweep profits to cold storage regularly.
    - Never reuse the mnemonic of a cold wallet.
 3. **monero-wallet-rpc.** Start it with `--disable-rpc-login --rpc-bind-ip 127.0.0.1` against your own `monerod`. Fund subaddress 0 as XMR inventory.
-4. **Fund inventory** (XMR, plus BTC/ETH for XMR → BTC/ETH payouts) and set `MAX_ORDER_USD` below your float.
+4. **Fund inventory** and set `MAX_ORDER_USD` below your float:
+   - XMR, plus BTC/ETH for XMR → BTC/ETH payouts
+   - **ETH on the inventory address for gas top-ups** of stablecoin deposits; without it, stable orders go to `needs_review`
+   - stables collected from stable → XMR orders pile up on the ETH inventory address. Sell or rebalance them regularly.
 5. **Dry run on live chains.** Use `CHAINS=live DRY_RUN=true` and check the logs for what *would* be broadcast.
 6. **Small live amounts.** Set `DRY_RUN=false` with `MAX_ORDER_USD` small. Do every route at least once, plus a refund.
 7. **Monitor.** Watch the `awaiting_approval` and `needs_review` queues, inventory levels and DEX halts (THORChain halts chains regularly). Large orders sit still until someone approves them.
@@ -136,6 +156,8 @@ Lessons taken from Wagyu's incidents (see `../plan/05-wagyu-analysis.md`):
 - **No IP logging, minimal data.** The Fastify logger is off, orders are hard-deleted after `RETENTION_DAYS`, and the order token is stored as a hash only.
 - **Nothing executes on unconfirmed deposits.** Confirmations are configurable per chain (BTC 2, ETH 12, XMR 10).
 - **Prices.** The oracle deviation guard blocks quotes when price sources disagree.
+- **USDC and USDT can be frozen by their issuers** (Circle / Tether blacklist addresses). Your hot wallet holds them while an order runs and as inventory, so keep stable balances low and sweep often.
+- **Gas top-ups wait for a receipt** (up to 3 min). The engine processes orders one by one, so a slow top-up delays other orders. Fine for a prototype; use a worker queue for volume.
 - **Defaults are safe.** `DRY_RUN=true` and `CHAINS=mock` are the defaults. Live mainnet refuses to start without `ADMIN_TOKEN`.
 - **Still to add for production:**
   - an HSM or a separate signer process (keys are currently in the app process)
@@ -154,5 +176,7 @@ Running this for the public without a licence is not legal there. Get legal advi
 ## Next steps
 - **XMR rebalancing via atomic swaps.** Add the fork's taker (BTC → XMR from eigenwallet makers) as a route, and run an `asb` to sell surplus XMR. This needs a headless taker API in the Rust fork.
 - **THORChain XMR as input.** Monero deposits to THORChain need the memo in `tx_extra`, which `monero-wallet-rpc` cannot set. A custom signer is needed.
-- **More chains and tokens.** ERC-20 deposits (approve/router flow, gas top-ups), SOL and ZEC deposit wallets, Lightning.
+- **More stablecoin networks.** USDT on **Tron** is the most-used stable for swaps (NEAR Intents and THORChain both support it). Then USDC/USDT on Solana, and USDC on Base/Arbitrum (cheap gas).
+- **THORChain for token deposits.** Add `approve` + `router.depositWithExpiry`, so stable deposits can also use THORChain pools.
+- **More deposit coins.** SOL and ZEC deposit wallets, Lightning.
 - **Affiliate fees.** THORChain affiliate memo and 1Click `appFees`, instead of deducting the fee before forwarding.

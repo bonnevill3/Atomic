@@ -6,11 +6,12 @@ import {
   http,
   type PublicClient,
   stringToHex,
+  type Transport,
 } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { mainnet, sepolia } from "viem/chains";
 import type { Network } from "../assets";
-import type { ChainWallet, DepositInfo, SendRequest, SendResult, SendSource } from "./types";
+import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult, SendSource } from "./types";
 
 const GAS_PLAIN = 21_000n;
 const GAS_MEMO = 60_000n;
@@ -26,24 +27,46 @@ export class EvmKeys {
   }
 }
 
-/** Ethereum (native ETH only) hot wallet over JSON-RPC. */
+/** Shared JSON-RPC access for the ETH wallet and the ERC-20 wallets. */
+export class EvmRpc {
+  readonly client: PublicClient;
+  readonly chain: Chain;
+  private transport: Transport;
+
+  constructor(network: Network, rpcUrl?: string, transport?: Transport) {
+    this.chain = network === "mainnet" ? mainnet : sepolia;
+    const url =
+      rpcUrl ?? (network === "mainnet" ? "https://ethereum-rpc.publicnode.com" : "https://ethereum-sepolia-rpc.publicnode.com");
+    this.transport = transport ?? http(url);
+    this.client = createPublicClient({ chain: this.chain, transport: this.transport });
+  }
+
+  walletFor(account: HDAccount) {
+    return createWalletClient({ account, chain: this.chain, transport: this.transport });
+  }
+
+  async fees() {
+    const f = await this.client.estimateFeesPerGas();
+    return { maxFeePerGas: f.maxFeePerGas!, maxPriorityFeePerGas: f.maxPriorityFeePerGas! };
+  }
+
+  /** Block number that has at least `confirmations` confirmations. */
+  async safeBlock(confirmations: number): Promise<bigint> {
+    const latest = await this.client.getBlockNumber();
+    return latest - BigInt(Math.max(0, confirmations - 1));
+  }
+}
+
+/** Ethereum (native ETH) hot wallet over JSON-RPC. */
 export class EvmWallet implements ChainWallet {
+  readonly asset = "ETH" as const;
   readonly chain = "ETH" as const;
-  private client: PublicClient;
-  private evmChain: Chain;
-  private rpcUrl: string;
 
   constructor(
     private keys: EvmKeys,
-    network: Network,
-    rpcUrl: string | undefined,
+    private rpc: EvmRpc,
     private confirmations: number,
-  ) {
-    this.evmChain = network === "mainnet" ? mainnet : sepolia;
-    this.rpcUrl =
-      rpcUrl ?? (network === "mainnet" ? "https://ethereum-rpc.publicnode.com" : "https://ethereum-sepolia-rpc.publicnode.com");
-    this.client = createPublicClient({ chain: this.evmChain, transport: http(this.rpcUrl) });
-  }
+  ) {}
 
   async depositAddress(index: number) {
     return { address: this.keys.account({ kind: "deposit", index }).address, index };
@@ -54,42 +77,35 @@ export class EvmWallet implements ChainWallet {
   }
 
   async getDeposit(address: string): Promise<DepositInfo> {
-    const latest = await this.client.getBlockNumber();
-    const safeBlock = latest - BigInt(Math.max(0, this.confirmations - 1));
+    const blockNumber = await this.rpc.safeBlock(this.confirmations);
     const [seen, confirmed] = await Promise.all([
-      this.client.getBalance({ address: address as `0x${string}` }),
-      this.client.getBalance({ address: address as `0x${string}`, blockNumber: safeBlock }),
+      this.rpc.client.getBalance({ address: address as `0x${string}` }),
+      this.rpc.client.getBalance({ address: address as `0x${string}`, blockNumber }),
     ]);
     // Native transfers are not indexed by plain JSON-RPC; txids need an indexer (not required here).
     return { seen, confirmed, txids: [] };
   }
 
   async inventoryBalance(): Promise<bigint> {
-    return this.client.getBalance({ address: await this.inventoryAddress() as `0x${string}` });
+    return this.rpc.client.getBalance({ address: (await this.inventoryAddress()) as `0x${string}` });
   }
 
-  private async fees() {
-    const f = await this.client.estimateFeesPerGas();
-    return { maxFeePerGas: f.maxFeePerGas!, maxPriorityFeePerGas: f.maxPriorityFeePerGas! };
-  }
-
-  async estimateSendFee(memo: boolean): Promise<bigint> {
-    return (memo ? GAS_MEMO : GAS_PLAIN) * (await this.fees()).maxFeePerGas;
+  async estimateSendFee(memo: boolean): Promise<Fee> {
+    return { asset: "ETH", amount: (memo ? GAS_MEMO : GAS_PLAIN) * (await this.rpc.fees()).maxFeePerGas };
   }
 
   async send(req: SendRequest): Promise<SendResult> {
     const account = this.keys.account(req.from);
-    const wallet = createWalletClient({ account, chain: this.evmChain, transport: http(this.rpcUrl) });
     const data = req.memo ? stringToHex(req.memo) : undefined;
-    const fees = await this.fees();
+    const fees = await this.rpc.fees();
     const gas = data
-      ? await this.client.estimateGas({ account, to: req.to as `0x${string}`, value: 1n, data }).then((g) => (g * 12n) / 10n)
+      ? await this.rpc.client.estimateGas({ account, to: req.to as `0x${string}`, value: 1n, data }).then((g) => (g * 12n) / 10n)
       : GAS_PLAIN;
     const maxFee = gas * fees.maxFeePerGas;
-    const balance = await this.client.getBalance({ address: account.address });
+    const balance = await this.rpc.client.getBalance({ address: account.address });
     const value = req.amount === "all" ? balance - maxFee : req.amount;
     if (value <= 0n || value + maxFee > balance) throw new Error("insufficient ETH for amount + gas");
-    const txid = await wallet.sendTransaction({ to: req.to as `0x${string}`, value, data, gas, ...fees });
+    const txid = await this.rpc.walletFor(account).sendTransaction({ to: req.to as `0x${string}`, value, data, gas, ...fees });
     return { txid, amount: value, fee: maxFee };
   }
 }

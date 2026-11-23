@@ -1,5 +1,5 @@
-import { ASSETS, type Asset, PLACEHOLDER_ADDRESS } from "./assets";
-import type { Wallets } from "./chains/types";
+import { ASSETS, type Asset, getAsset, PLACEHOLDER_ADDRESS } from "./assets";
+import type { Fee, Wallets } from "./chains/types";
 import type { Config } from "./config";
 import type { RouteKind } from "./db";
 import { log } from "./log";
@@ -56,7 +56,7 @@ export class Router {
   async plan(input: PlanInput): Promise<RoutePlan[]> {
     const { from, to } = input;
     if (from.id === to.id) throw new QuoteError("from and to must differ");
-    if (!from.depositable || !this.wallets[from.chain]) throw new QuoteError(`${from.symbol} deposits are not supported`);
+    if (!from.depositable || !this.wallets[from.id]) throw new QuoteError(`${from.symbol} deposits are not supported`);
     await this.checkLimits(input);
 
     const serviceFee = bpsOf(input.amountIn, this.cfg.SERVICE_FEE_BPS);
@@ -90,6 +90,14 @@ export class Router {
     if (usd > this.cfg.MAX_ORDER_USD) throw new QuoteError(`maximum is about $${this.cfg.MAX_ORDER_USD}`);
   }
 
+  /** Express a network fee in `asset` units (ERC-20 transfers pay gas in ETH). */
+  private async feeIn(fee: Fee, asset: Asset): Promise<bigint> {
+    if (fee.asset === asset.id) return fee.amount;
+    const feeAsset = getAsset(fee.asset)!;
+    const [pf, pa] = await Promise.all([this.oracle.price(feeAsset), this.oracle.price(asset)]);
+    return convertByPrice(fee.amount, feeAsset, pf.usd, asset, pa.usd) + 1n; // round up
+  }
+
   private recipientFor(input: PlanInput): string {
     return input.recipient ?? PLACEHOLDER_ADDRESS[input.to.chain];
   }
@@ -97,8 +105,8 @@ export class Router {
   /** Deposit (minus fees) is forwarded to a DEX, which pays the user directly. */
   private async dexRoute(dex: DexProvider, input: PlanInput, serviceFee: bigint): Promise<RoutePlan> {
     if (!(await dex.supports(input.from, input.to))) throw new QuoteError(`${dex.name}: pair not supported`);
-    const wallet = this.wallets[input.from.chain]!;
-    const forwardFee = await wallet.estimateSendFee(dex.name === "thorchain");
+    const wallet = this.wallets[input.from.id]!;
+    const forwardFee = await this.feeIn(await wallet.estimateSendFee(dex.name === "thorchain"), input.from);
     const net = input.amountIn - serviceFee - forwardFee;
     if (net <= 0n) throw new QuoteError("amount too small to cover fees");
     const q = await dex.quote({
@@ -121,11 +129,11 @@ export class Router {
   /** We pay `to` from our own inventory at the oracle price minus spread. */
   private async inventoryRoute(input: PlanInput, serviceFee: bigint): Promise<RoutePlan> {
     const { from, to } = input;
-    const wallet = this.wallets[to.chain];
+    const wallet = this.wallets[to.id];
     if (!wallet) throw new QuoteError(`no ${to.symbol} wallet`);
     const [pf, pt] = await Promise.all([this.oracle.price(from), this.oracle.price(to)]);
     const gross = convertByPrice(input.amountIn - serviceFee, from, pf.usd, to, pt.usd);
-    const payoutFee = await wallet.estimateSendFee(false);
+    const payoutFee = await this.feeIn(await wallet.estimateSendFee(false), to);
     const out = applyBps(gross, this.cfg.INVENTORY_SPREAD_BPS) - payoutFee;
     if (out <= 0n) throw new QuoteError("amount too small to cover fees");
     await this.requireInventory(to, out);
@@ -143,7 +151,7 @@ export class Router {
     const ethWallet = this.wallets.ETH;
     if (!ethWallet) throw new QuoteError("no ETH inventory wallet");
     const [pf, pb] = await Promise.all([this.oracle.price(from), this.oracle.price(BRIDGE)]);
-    const forwardFee = await ethWallet.estimateSendFee(true);
+    const forwardFee = await this.feeIn(await ethWallet.estimateSendFee(true), BRIDGE);
     const bridgeAmount =
       applyBps(convertByPrice(input.amountIn - serviceFee, from, pf.usd, BRIDGE, pb.usd), this.cfg.INVENTORY_SPREAD_BPS) - forwardFee;
     if (bridgeAmount <= 0n) throw new QuoteError("amount too small to cover fees");
@@ -173,7 +181,7 @@ export class Router {
   }
 
   private async requireInventory(asset: Asset, amount: bigint): Promise<void> {
-    const bal = await this.wallets[asset.chain]!.inventoryBalance();
+    const bal = await this.wallets[asset.id]!.inventoryBalance();
     if (bal < amount) throw new QuoteError(`insufficient ${asset.symbol} liquidity`);
   }
 }

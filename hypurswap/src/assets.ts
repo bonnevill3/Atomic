@@ -6,14 +6,18 @@ import { parseMoneroAddress } from "./validate/monero";
 
 export type Network = "mainnet" | "testnet";
 export type ChainId = "BTC" | "ETH" | "XMR" | "SOL" | "ZEC";
-export type AssetId = "BTC" | "ETH" | "USDC" | "XMR" | "SOL" | "ZEC";
+export type AssetId = "BTC" | "ETH" | "USDC" | "USDT" | "XMR" | "SOL" | "ZEC";
 
 export interface Asset {
   id: AssetId;
   symbol: string;
   name: string;
   chain: ChainId;
+  /** Network label shown to users, e.g. "Ethereum (ERC-20)". */
+  network: string;
   decimals: number;
+  /** ERC-20 contract per network; set only for tokens. */
+  contracts?: Partial<Record<Network, `0x${string}`>>;
   /** We run a deposit wallet for this asset (users can send it to us). */
   depositable: boolean;
   /** We hold inventory of this asset and can pay it out directly. */
@@ -26,35 +30,47 @@ export interface Asset {
 
 export const ASSETS: Record<AssetId, Asset> = {
   BTC: {
-    id: "BTC", symbol: "BTC", name: "Bitcoin", chain: "BTC", decimals: 8,
+    id: "BTC", symbol: "BTC", name: "Bitcoin", chain: "BTC", network: "Bitcoin", decimals: 8,
     depositable: true, inventory: true,
     thorchain: "BTC.BTC", near: "nep141:btc.omft.near", kraken: "XBTUSD", coingecko: "bitcoin",
   },
   ETH: {
-    id: "ETH", symbol: "ETH", name: "Ethereum", chain: "ETH", decimals: 18,
+    id: "ETH", symbol: "ETH", name: "Ethereum", chain: "ETH", network: "Ethereum", decimals: 18,
     depositable: true, inventory: true,
     thorchain: "ETH.ETH", near: "nep141:eth.omft.near", kraken: "ETHUSD", coingecko: "ethereum",
   },
   USDC: {
-    id: "USDC", symbol: "USDC", name: "USD Coin (Ethereum)", chain: "ETH", decimals: 6,
-    depositable: false, inventory: false,
+    id: "USDC", symbol: "USDC", name: "USD Coin", chain: "ETH", network: "Ethereum (ERC-20)", decimals: 6,
+    depositable: true, inventory: false,
+    contracts: {
+      mainnet: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      testnet: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Circle's Sepolia USDC
+    },
     thorchain: "ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48",
     near: "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
     kraken: "USDCUSD", coingecko: "usd-coin",
   },
+  USDT: {
+    id: "USDT", symbol: "USDT", name: "Tether USD", chain: "ETH", network: "Ethereum (ERC-20)", decimals: 6,
+    depositable: true, inventory: false,
+    contracts: { mainnet: "0xdAC17F958D2ee523a2206206994597C13D831ec7" },
+    thorchain: "ETH.USDT-0XDAC17F958D2EE523A2206206994597C13D831EC7",
+    near: "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near",
+    kraken: "USDTUSD", coingecko: "tether",
+  },
   XMR: {
-    id: "XMR", symbol: "XMR", name: "Monero", chain: "XMR", decimals: 12,
+    id: "XMR", symbol: "XMR", name: "Monero", chain: "XMR", network: "Monero", decimals: 12,
     depositable: true, inventory: true,
     // THORChain announced native XMR; the provider only uses it once an XMR.XMR pool is live.
     thorchain: "XMR.XMR", kraken: "XMRUSD", coingecko: "monero",
   },
   SOL: {
-    id: "SOL", symbol: "SOL", name: "Solana", chain: "SOL", decimals: 9,
+    id: "SOL", symbol: "SOL", name: "Solana", chain: "SOL", network: "Solana", decimals: 9,
     depositable: false, inventory: false,
     near: "nep141:sol.omft.near", kraken: "SOLUSD", coingecko: "solana",
   },
   ZEC: {
-    id: "ZEC", symbol: "ZEC", name: "Zcash", chain: "ZEC", decimals: 8,
+    id: "ZEC", symbol: "ZEC", name: "Zcash", chain: "ZEC", network: "Zcash", decimals: 8,
     depositable: false, inventory: false,
     thorchain: "ZEC.ZEC", near: "nep141:zec.omft.near", kraken: "ZECUSD", coingecko: "zcash",
   },
@@ -62,6 +78,11 @@ export const ASSETS: Record<AssetId, Asset> = {
 
 export function getAsset(id: string): Asset | undefined {
   return (ASSETS as Record<string, Asset>)[id];
+}
+
+/** ERC-20 contract of a token on this network, or undefined for native coins. */
+export function tokenContract(asset: Asset, network: Network): `0x${string}` | undefined {
+  return asset.contracts?.[network];
 }
 
 function sha256d(data: Uint8Array): Buffer {

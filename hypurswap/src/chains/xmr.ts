@@ -1,5 +1,5 @@
 import { fetchJson } from "../log";
-import type { ChainWallet, DepositInfo, SendRequest, SendResult } from "./types";
+import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult } from "./types";
 
 /** Conservative fee estimate for one normal-priority transfer (piconero). */
 const FEE_ESTIMATE = 100_000_000n; // 0.0001 XMR
@@ -11,6 +11,7 @@ interface Transfer { amount: number | string; confirmations?: number; txid: stri
  * inventory is the account's unlocked balance.
  */
 export class XmrWallet implements ChainWallet {
+  readonly asset = "XMR" as const;
   readonly chain = "XMR" as const;
   private id = 0;
 
@@ -61,8 +62,8 @@ export class XmrWallet implements ChainWallet {
     return BigInt(main?.unlocked_balance ?? 0);
   }
 
-  async estimateSendFee(): Promise<bigint> {
-    return FEE_ESTIMATE;
+  async estimateSendFee(): Promise<Fee> {
+    return { asset: "XMR", amount: FEE_ESTIMATE };
   }
 
   async send(req: SendRequest): Promise<SendResult> {

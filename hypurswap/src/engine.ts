@@ -96,7 +96,7 @@ export class Engine {
   }
 
   private async checkDeposit(o: OrderRow): Promise<void> {
-    const wallet = this.wallets[o.deposit_chain]!;
+    const wallet = this.wallets[o.from_asset]!;
     const d = await wallet.getDeposit(o.deposit_address, o.deposit_index);
     const now = Date.now();
 
@@ -146,7 +146,7 @@ export class Engine {
 
   /** Approved by the operator: execute the approved amount, unless the deposit changed since. */
   private async executeApproved(o: OrderRow): Promise<void> {
-    const d = await this.wallets[o.deposit_chain]!.getDeposit(o.deposit_address, o.deposit_index);
+    const d = await this.wallets[o.from_asset]!.getDeposit(o.deposit_address, o.deposit_index);
     const approved = BigInt(o.received_amount!);
     if (d.confirmed !== approved || d.seen !== d.confirmed) {
       // More (or less) arrived after approval: run the normal flow again, which re-checks the threshold.
@@ -194,7 +194,7 @@ export class Engine {
 
   private async execute(o: OrderRow, plan: RoutePlan): Promise<void> {
     if (plan.kind === "inventory") {
-      const payout = await this.wallets[plan.to.chain]!.send({
+      const payout = await this.wallets[plan.to.id]!.send({
         from: { kind: "inventory" }, to: o.recipient, amount: plan.amountOut,
       });
       this.db.transition(o.id, "executing", { status: "completed", payout_txid: payout.txid, amount_out: payout.amount.toString() });
@@ -205,8 +205,8 @@ export class Engine {
 
     const q = plan.dex!;
     const source = plan.kind === "dex"
-      ? { wallet: this.wallets[o.deposit_chain]!, from: { kind: "deposit" as const, index: o.deposit_index } }
-      : { wallet: this.wallets[plan.bridgeAsset!.chain]!, from: { kind: "inventory" as const } };
+      ? { wallet: this.wallets[o.from_asset]!, from: { kind: "deposit" as const, index: o.deposit_index } }
+      : { wallet: this.wallets[plan.bridgeAsset!.id]!, from: { kind: "inventory" as const } };
     const sent = await source.wallet.send({ from: source.from, to: q.depositAddress!, amount: q.amountIn, memo: q.memo });
     const ref: DexRef = { provider: q.provider, txid: sent.txid, depositAddress: q.depositAddress };
     this.db.transition(o.id, "executing", { status: "dex_pending", exec_txid: sent.txid, exec_ref: JSON.stringify(ref) });
@@ -216,7 +216,7 @@ export class Engine {
 
   /** After completion, move whatever is left on the deposit address (deposit or fee residue) into inventory. */
   private async consolidate(o: OrderRow): Promise<void> {
-    const wallet = this.wallets[o.deposit_chain]!;
+    const wallet = this.wallets[o.from_asset]!;
     try {
       const d = await wallet.getDeposit(o.deposit_address, o.deposit_index);
       if (d.confirmed === 0n) return;
@@ -257,7 +257,7 @@ export class Engine {
   }
 
   private async refund(o: OrderRow): Promise<void> {
-    const wallet = this.wallets[o.deposit_chain]!;
+    const wallet = this.wallets[o.from_asset]!;
     const d = await wallet.getDeposit(o.deposit_address, o.deposit_index);
     if (d.confirmed === 0n) {
       // e.g. a DEX refund still on its way back to the deposit address

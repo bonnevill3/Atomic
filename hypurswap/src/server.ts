@@ -5,7 +5,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import QRCode from "qrcode";
 import { z } from "zod";
-import { ASSETS, type Asset, getAsset, isValidAddress } from "./assets";
+import { ASSETS, type Asset, getAsset, isValidAddress, tokenContract } from "./assets";
 import { MockWallet } from "./chains/mock";
 import type { Wallets } from "./chains/types";
 import type { Config } from "./config";
@@ -77,7 +77,9 @@ function orderView(o: OrderRow) {
     id: o.id,
     status: publicStatus[o.status],
     from: from.id,
+    fromNetwork: from.network,
     to: to.id,
+    toNetwork: to.network,
     depositAddress: o.deposit_address,
     depositAmount: fmt(o.amount_in, from),
     received: fmt(o.received_amount, from),
@@ -125,8 +127,9 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
 
   app.get("/api/assets", async () =>
     Object.values(ASSETS).map((a) => ({
-      id: a.id, symbol: a.symbol, name: a.name, chain: a.chain, decimals: a.decimals,
-      canSend: a.depositable && !!wallets[a.chain], canReceive: true,
+      id: a.id, symbol: a.symbol, name: a.name, network: a.network, chain: a.chain, decimals: a.decimals,
+      token: tokenContract(a, cfg.NETWORK) ?? null,
+      canSend: a.depositable && !!wallets[a.id], canReceive: true,
     })),
   );
 
@@ -161,7 +164,8 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     // Indicative quote with the real recipient (lets the DEX validate the address too).
     const plan = await router.best({ from, to, amountIn, recipient: b.recipient, dry: true });
 
-    const wallet = wallets[from.chain]!;
+    const wallet = wallets[from.id]!;
+    // ERC-20 tokens share the ETH index space, so allocate per chain.
     const dep = await wallet.depositAddress(db.allocateIndex(from.chain));
     const token = randomBytes(24).toString("base64url");
     const order = db.insertOrder({
@@ -198,8 +202,10 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
     const o = authorizedOrder(req);
     const from = getAsset(o.from_asset)!;
     const amount = fromAtomic(BigInt(o.amount_in), from);
+    const token = tokenContract(from, cfg.NETWORK);
     const uri =
-      from.chain === "XMR" ? `monero:${o.deposit_address}?tx_amount=${amount}`
+      token ? `ethereum:${token}/transfer?address=${o.deposit_address}&uint256=${o.amount_in}` // EIP-681
+      : from.chain === "XMR" ? `monero:${o.deposit_address}?tx_amount=${amount}`
       : from.chain === "BTC" ? `bitcoin:${o.deposit_address}?amount=${amount}`
       : `${URI_SCHEME[from.chain]}:${o.deposit_address}`;
     const svg = await QRCode.toString(uri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
@@ -234,10 +240,7 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
 
       admin.get("/admin/inventory", async () => {
         const out: Record<string, string> = {};
-        for (const [chain, w] of Object.entries(wallets)) {
-          const a = Object.values(ASSETS).find((x) => x.chain === chain && x.inventory)!;
-          out[chain] = fromAtomic(await w!.inventoryBalance(), a);
-        }
+        for (const [id, w] of Object.entries(wallets)) out[id] = fromAtomic(await w!.inventoryBalance(), getAsset(id)!);
         return out;
       });
 
@@ -278,7 +281,7 @@ export async function buildServer(cfg: Config, db: Db, router: Router, wallets: 
           const b = z.object({ orderId: z.string(), amount: z.string().optional(), confirmed: z.boolean().optional() }).parse(req.body);
           const o = db.getOrder(b.orderId);
           if (!o) throw new ApiError(404, "order not found");
-          const w = wallets[o.deposit_chain];
+          const w = wallets[o.from_asset];
           if (!(w instanceof MockWallet)) throw new ApiError(400, "not a mock wallet");
           const amount = b.amount ? toAtomic(b.amount, getAsset(o.from_asset)!) : BigInt(o.amount_in);
           const txid = w.simulateDeposit(o.deposit_address, amount, b.confirmed ?? true);

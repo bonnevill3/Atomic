@@ -1,4 +1,4 @@
-import type { ChainId } from "../assets";
+import type { AssetId, ChainId } from "../assets";
 
 export interface DepositInfo {
   /** Total received at the address, any confirmations. */
@@ -13,7 +13,7 @@ export type SendSource = { kind: "deposit"; index: number } | { kind: "inventory
 export interface SendRequest {
   from: SendSource;
   to: string;
-  /** Exact amount, or "all" = sweep the source minus the network fee. */
+  /** Exact amount, or "all" = sweep the source (minus the network fee for native coins). */
   amount: bigint | "all";
   /** THORChain swap memo (BTC: OP_RETURN, ETH: tx data). */
   memo?: string;
@@ -21,26 +21,35 @@ export interface SendRequest {
 
 export interface SendResult {
   txid: string;
-  /** Amount that left for `to` (after fee when sweeping). */
+  /** Amount of the wallet's asset that left for `to`. */
   amount: bigint;
+  /** Network fee paid, in the chain's native coin (e.g. wei for ERC-20 transfers). */
   fee: bigint;
 }
 
+/** A network fee and the asset it is paid in (ERC-20 transfers pay gas in ETH). */
+export interface Fee {
+  asset: AssetId;
+  amount: bigint;
+}
+
 /**
- * One custodial hot wallet per chain. Per-order deposit addresses are derived from the
- * same seed (BTC/ETH) or are subaddresses (XMR). "inventory" is the operator's float.
+ * One custodial hot wallet per asset. Per-order deposit addresses are derived from the
+ * same seed (BTC/ETH/ERC-20 share the ETH index space) or are subaddresses (XMR).
+ * "inventory" is the operator's float.
  */
 export interface ChainWallet {
+  asset: AssetId;
   chain: ChainId;
-  /** Derive (BTC/ETH) or create (XMR, ignores `index`) a deposit address. */
+  /** Derive (BTC/ETH/ERC-20) or create (XMR, ignores `index`) a deposit address. */
   depositAddress(index: number): Promise<{ address: string; index: number }>;
   inventoryAddress(): Promise<string>;
   getDeposit(address: string, index: number): Promise<DepositInfo>;
-  /** Spendable inventory balance. */
+  /** Spendable inventory balance of this asset. */
   inventoryBalance(): Promise<bigint>;
   /** Estimated network fee for one send (with a memo if `memo`). */
-  estimateSendFee(memo: boolean): Promise<bigint>;
+  estimateSendFee(memo: boolean): Promise<Fee>;
   send(req: SendRequest): Promise<SendResult>;
 }
 
-export type Wallets = Partial<Record<ChainId, ChainWallet>>;
+export type Wallets = Partial<Record<AssetId, ChainWallet>>;

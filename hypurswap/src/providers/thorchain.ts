@@ -52,6 +52,8 @@ export class ThorchainProvider implements DexProvider {
     if (!from.thorchain || !to.thorchain) return false;
     // Native XMR deposits need a memo in tx_extra, which monero-wallet-rpc cannot set.
     if (from.chain === "XMR") return false;
+    // ERC-20 deposits need approve + router.depositWithExpiry; our token wallet only does plain transfers.
+    if (from.contracts) return false;
     try {
       const m = await this.metadata();
       const chainOf = (a: string) => a.split(".")[0];

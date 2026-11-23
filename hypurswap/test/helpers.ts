@@ -50,9 +50,9 @@ export function setup(prices: Partial<Record<AssetId, number>> = { BTC: 60000, E
   const source = staticSource(prices);
   const oracle = new PriceOracle(Object.values(ASSETS), cfg.MAX_ORACLE_DEVIATION_BPS, [source], 0);
   const wallets = {
-    BTC: new MockWallet("BTC", 100_000_000n, 1_000n),
-    ETH: new MockWallet("ETH", 10n * 10n ** 18n, 10n ** 15n),
-    XMR: new MockWallet("XMR", 100n * 10n ** 12n, 10n ** 8n),
+    BTC: new MockWallet("BTC", "BTC", 100_000_000n, 1_000n),
+    ETH: new MockWallet("ETH", "ETH", 10n * 10n ** 18n, 10n ** 15n),
+    XMR: new MockWallet("XMR", "XMR", 100n * 10n ** 12n, 10n ** 8n),
   } satisfies Wallets;
   return { cfg, db, oracle, source, wallets };
 }

@@ -5,7 +5,7 @@ import { ECPairFactory } from "ecpair";
 import * as ecc from "tiny-secp256k1";
 import type { Network } from "../assets";
 import { fetchJson } from "../log";
-import type { ChainWallet, DepositInfo, SendRequest, SendResult } from "./types";
+import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult } from "./types";
 
 bitcoin.initEccLib(ecc);
 const bip32 = BIP32Factory(ecc);
@@ -41,6 +41,7 @@ const VBYTES = { overhead: 11, input: 68, output: 43, opReturn: 11 + 80 };
 
 /** Bitcoin hot wallet backed by an Esplora HTTP API (blockstream.info / mempool.space / self-hosted). */
 export class BtcWallet implements ChainWallet {
+  readonly asset = "BTC" as const;
   readonly chain = "BTC" as const;
 
   constructor(
@@ -89,9 +90,9 @@ export class BtcWallet implements ChainWallet {
     return Math.max(1, Math.ceil(est["3"] ?? est["6"] ?? 2));
   }
 
-  async estimateSendFee(memo: boolean): Promise<bigint> {
+  async estimateSendFee(memo: boolean): Promise<Fee> {
     const vsize = VBYTES.overhead + VBYTES.input + 2 * VBYTES.output + (memo ? VBYTES.opReturn : 0);
-    return BigInt(vsize * (await this.feeRate()));
+    return { asset: "BTC", amount: BigInt(vsize * (await this.feeRate())) };
   }
 
   async send(req: SendRequest): Promise<SendResult> {

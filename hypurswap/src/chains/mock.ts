@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { type ChainId, PLACEHOLDER_ADDRESS } from "../assets";
+import { type AssetId, type ChainId, PLACEHOLDER_ADDRESS } from "../assets";
 import { log } from "../log";
-import type { ChainWallet, DepositInfo, SendRequest, SendResult } from "./types";
+import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult } from "./types";
 
 /**
  * In-memory chain for development and tests. Deposits are simulated via `simulateDeposit`
@@ -11,12 +11,23 @@ export class MockWallet implements ChainWallet {
   readonly sent: (SendRequest & { txid: string })[] = [];
   private deposits = new Map<string, { amount: bigint; confirmed: boolean; txid: string }[]>();
 
+  /**
+   * @param fee network fee per send; for ERC-20 mocks pass `feeAsset: "ETH"`, like the real token wallet.
+   *            Fees in another asset are not deducted from this wallet's balances.
+   */
   constructor(
+    readonly asset: AssetId,
     readonly chain: ChainId,
     private inventory: bigint,
     private fee: bigint,
-    private addressFor: (index: number) => string = (i) => `mock-${chain.toLowerCase()}-deposit-${i}`,
+    private addressFor: (index: number) => string = (i) => `mock-${asset.toLowerCase()}-deposit-${i}`,
+    private feeAsset: AssetId = asset,
   ) {}
+
+  /** Fee deducted from this wallet's own balances (0 when gas is paid in another asset). */
+  private get ownFee(): bigint {
+    return this.feeAsset === this.asset ? this.fee : 0n;
+  }
 
   async depositAddress(index: number) {
     return { address: this.addressFor(index), index };
@@ -51,29 +62,30 @@ export class MockWallet implements ChainWallet {
     return this.inventory;
   }
 
-  async estimateSendFee() {
-    return this.fee;
+  async estimateSendFee(): Promise<Fee> {
+    return { asset: this.feeAsset, amount: this.fee };
   }
 
   async send(req: SendRequest): Promise<SendResult> {
     const txid = `mock-${randomBytes(16).toString("hex")}`;
     let amount: bigint;
+    const fee = this.ownFee;
     if (req.from.kind === "inventory") {
-      amount = req.amount === "all" ? this.inventory - this.fee : req.amount;
-      if (amount + this.fee > this.inventory) throw new Error("mock: insufficient inventory");
-      this.inventory -= amount + this.fee;
+      amount = req.amount === "all" ? this.inventory - fee : req.amount;
+      if (amount + fee > this.inventory) throw new Error("mock: insufficient inventory");
+      this.inventory -= amount + fee;
     } else {
       const addr = this.addressFor(req.from.index);
       const total = (await this.getDeposit(addr)).confirmed;
-      amount = req.amount === "all" ? total - this.fee : req.amount;
-      if (amount <= 0n || amount + this.fee > total) throw new Error("mock: insufficient deposit");
-      const rest = total - amount - this.fee;
+      amount = req.amount === "all" ? total - fee : req.amount;
+      if (amount <= 0n || amount + fee > total) throw new Error("mock: insufficient deposit");
+      const rest = total - amount - fee;
       this.deposits.set(addr, []); // swept; change goes to inventory
       this.inventory += rest;
     }
     if (req.to === (await this.inventoryAddress())) this.inventory += amount; // consolidation
     this.sent.push({ ...req, txid });
-    log.info("mock send", { chain: this.chain, to: req.to, amount, memo: req.memo, txid });
+    log.info("mock send", { asset: this.asset, to: req.to, amount, memo: req.memo, txid });
     return { txid, amount, fee: this.fee };
   }
 }
@@ -81,6 +93,9 @@ export class MockWallet implements ChainWallet {
 /** Wraps a real wallet: reads are live, sends are logged and never broadcast. */
 export class DryRunWallet implements ChainWallet {
   constructor(private inner: ChainWallet) {}
+  get asset() {
+    return this.inner.asset;
+  }
   get chain() {
     return this.inner.chain;
   }
@@ -101,7 +116,7 @@ export class DryRunWallet implements ChainWallet {
   }
   async send(req: SendRequest): Promise<SendResult> {
     const txid = `dryrun-${randomBytes(16).toString("hex")}`;
-    log.warn("DRY_RUN: not broadcasting", { chain: this.chain, from: req.from, to: req.to, amount: req.amount, memo: req.memo, txid });
+    log.warn("DRY_RUN: not broadcasting", { asset: this.asset, from: req.from, to: req.to, amount: req.amount, memo: req.memo, txid });
     return { txid, amount: req.amount === "all" ? 0n : req.amount, fee: 0n };
   }
 }
