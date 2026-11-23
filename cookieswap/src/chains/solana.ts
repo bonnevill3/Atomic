@@ -1,16 +1,45 @@
-import { createHmac } from "node:crypto";
+import { createHmac, createPrivateKey, createPublicKey } from "node:crypto";
 import {
-  createAssociatedTokenAccountIdempotentInstruction,
-  createTransferCheckedInstruction,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
-import { type Commitment, Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getTransferCheckedInstruction,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
+import {
+  type Address,
+  address,
+  appendTransactionMessageInstructions,
+  type Blockhash,
+  type Commitment,
+  createKeyPairSignerFromPrivateKeyBytes,
+  createSolanaRpc,
+  createTransactionMessage,
+  getBase64EncodedWireTransaction,
+  getSignatureFromTransaction,
+  type KeyPairSigner,
+  pipe,
+  type Rpc,
+  type SolanaRpcApi,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+} from "@solana/kit";
 import { mnemonicToSeedSync } from "bip39";
 import type { AssetId } from "../assets";
+import { base58Encode } from "../validate/base58";
 import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult, SendSource } from "./types";
 
 /** Two signatures + rent for creating the recipient's token account if it is missing. */
 const FEE_ESTIMATE_LAMPORTS = 2 * 5_000 + 2_039_280;
+const CONFIRM_TIMEOUT_MS = 90_000;
+/** PKCS#8 DER prefix for a raw 32-byte Ed25519 private key. */
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+
+export type SolanaRpc = Rpc<SolanaRpcApi>;
+export interface Lifetime {
+  blockhash: Blockhash;
+  lastValidBlockHeight: bigint;
+}
 
 /** SLIP-0010 ed25519 derivation (hardened only). */
 export function slip10Ed25519(seed: Uint8Array, path: number[]): Uint8Array {
@@ -36,62 +65,82 @@ export class SolanaKeys {
     this.seed = mnemonicToSeedSync(mnemonic);
   }
 
-  keypair(source: SendSource): Keypair {
-    const i = source.kind === "deposit" ? source.index : 0;
-    if (source.kind === "deposit" && i === 0) throw new Error("deposit index 0 is the inventory account");
-    return Keypair.fromSeed(slip10Ed25519(this.seed, [44, 501, i, 0]));
+  private privateKey(source: SendSource): Uint8Array {
+    if (source.kind === "deposit" && source.index === 0) throw new Error("deposit index 0 is the inventory account");
+    return slip10Ed25519(this.seed, [44, 501, source.kind === "deposit" ? source.index : 0, 0]);
+  }
+
+  /** Public address, derived synchronously (no signer needed). */
+  address(source: SendSource): Address {
+    const key = createPrivateKey({ key: Buffer.concat([ED25519_PKCS8_PREFIX, this.privateKey(source)]), format: "der", type: "pkcs8" });
+    const spki = createPublicKey(key).export({ format: "der", type: "spki" });
+    return address(base58Encode(Uint8Array.from(spki.subarray(spki.length - 32))));
+  }
+
+  /** Signer for transactions (WebCrypto Ed25519 key pair). */
+  signer(source: SendSource): Promise<KeyPairSigner> {
+    return createKeyPairSignerFromPrivateKeyBytes(this.privateKey(source));
   }
 }
 
 /**
- * SPL token hot wallet (USDT/USDC on Solana). Deposits land in the deposit owner's associated
- * token account. When forwarding, the inventory account pays the transaction fee (and the rent
- * for the recipient's token account if missing), so deposit addresses never need SOL.
+ * SPL token hot wallet (USDT/USDC on Solana), built on @solana/kit.
+ * Deposits land in the deposit owner's associated token account. When forwarding, the inventory
+ * account pays the transaction fee (and the rent for the recipient's token account if missing),
+ * so deposit addresses never need SOL.
  */
 export class SplWallet implements ChainWallet {
   readonly chain = "SOL" as const;
-  private mint: PublicKey;
+  private mint: Address;
 
   constructor(
     readonly asset: AssetId,
     mint: string,
     private decimals: number,
     private keys: SolanaKeys,
-    private connection: Connection,
+    private rpc: SolanaRpc,
   ) {
-    this.mint = new PublicKey(mint);
+    this.mint = address(mint);
   }
 
-  static connect(url: string): Connection {
-    return new Connection(url, "confirmed");
+  static connect(url: string): SolanaRpc {
+    return createSolanaRpc(url);
   }
 
   async depositAddress(index: number) {
-    return { address: this.keys.keypair({ kind: "deposit", index }).publicKey.toBase58(), index };
+    return { address: this.keys.address({ kind: "deposit", index }), index };
   }
 
   async inventoryAddress() {
-    return this.keys.keypair({ kind: "inventory" }).publicKey.toBase58();
+    return this.keys.address({ kind: "inventory" });
+  }
+
+  private async ata(owner: Address): Promise<Address> {
+    const [pda] = await findAssociatedTokenPda({ owner, mint: this.mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    return pda;
   }
 
   /** Sum of all token accounts of `owner` for this mint. */
-  private async tokenBalance(owner: PublicKey, commitment: Commitment): Promise<bigint> {
-    const r = await this.connection.getParsedTokenAccountsByOwner(owner, { mint: this.mint }, commitment);
-    return r.value.reduce((s, a) => s + BigInt(a.account.data.parsed.info.tokenAmount.amount as string), 0n);
+  private async tokenBalance(owner: Address, commitment: Commitment): Promise<bigint> {
+    const r = await this.rpc
+      .getTokenAccountsByOwner(owner, { mint: this.mint }, { encoding: "jsonParsed", commitment })
+      .send();
+    return r.value.reduce((s, a) => s + BigInt(a.account.data.parsed.info.tokenAmount.amount), 0n);
   }
 
-  async getDeposit(address: string): Promise<DepositInfo> {
-    const owner = new PublicKey(address);
+  async getDeposit(addr: string): Promise<DepositInfo> {
+    const owner = address(addr);
     const [seen, confirmed] = await Promise.all([this.tokenBalance(owner, "confirmed"), this.tokenBalance(owner, "finalized")]);
     return { seen, confirmed, txids: [] };
   }
 
   async inventoryBalance(): Promise<bigint> {
-    return this.tokenBalance(this.keys.keypair({ kind: "inventory" }).publicKey, "finalized");
+    return this.tokenBalance(this.keys.address({ kind: "inventory" }), "finalized");
   }
 
   async gasBalance(): Promise<Fee> {
-    return { asset: "SOL", amount: BigInt(await this.connection.getBalance(this.keys.keypair({ kind: "inventory" }).publicKey, "confirmed")) };
+    const r = await this.rpc.getBalance(this.keys.address({ kind: "inventory" }), { commitment: "confirmed" }).send();
+    return { asset: "SOL", amount: BigInt(r.value) };
   }
 
   async estimateSendFee(memo: boolean): Promise<Fee> {
@@ -100,39 +149,60 @@ export class SplWallet implements ChainWallet {
   }
 
   /**
-   * Transfer from `source`'s associated token account to `to`'s (created idempotently).
-   * Fee payer: inventory account. Signed, not sent.
+   * Transfer from `source`'s associated token account to `to`'s (created idempotently),
+   * with the inventory account as fee payer. Returns the message and the signed transaction (not sent).
    */
-  buildTransfer(source: Keypair, payer: Keypair, to: string, amount: bigint, recentBlockhash: string): Transaction {
-    const destOwner = new PublicKey(to);
-    const sourceAta = getAssociatedTokenAddressSync(this.mint, source.publicKey);
-    const destAta = getAssociatedTokenAddressSync(this.mint, destOwner, true);
-    const tx = new Transaction({ feePayer: payer.publicKey, recentBlockhash }).add(
-      createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, destAta, destOwner, this.mint),
-      createTransferCheckedInstruction(sourceAta, this.mint, destAta, source.publicKey, amount, this.decimals),
+  async buildTransfer(source: KeyPairSigner, payer: KeyPairSigner, to: string, amount: bigint, lifetime: Lifetime) {
+    const owner = address(to);
+    const [sourceAta, destAta] = await Promise.all([this.ata(source.address), this.ata(owner)]);
+    const message = pipe(
+      createTransactionMessage({ version: 0 }),
+      (m) => setTransactionMessageFeePayerSigner(payer, m),
+      (m) => setTransactionMessageLifetimeUsingBlockhash(lifetime, m),
+      (m) => appendTransactionMessageInstructions([
+        getCreateAssociatedTokenIdempotentInstruction({ payer, ata: destAta, owner, mint: this.mint }),
+        getTransferCheckedInstruction({
+          source: sourceAta, mint: this.mint, destination: destAta, authority: source, amount, decimals: this.decimals,
+        }),
+      ], m),
     );
-    const signers = source.publicKey.equals(payer.publicKey) ? [payer] : [payer, source];
-    tx.sign(...signers);
-    return tx;
+    const transaction = await signTransactionMessageWithSigners(message);
+    return { message, transaction, sourceAta, destAta };
   }
 
   async send(req: SendRequest): Promise<SendResult> {
     if (req.memo) throw new Error("memo transfers are not supported on Solana");
-    const source = this.keys.keypair(req.from);
-    const payer = this.keys.keypair({ kind: "inventory" });
-    const ata = getAssociatedTokenAddressSync(this.mint, source.publicKey);
+    const payer = await this.keys.signer({ kind: "inventory" });
+    // One signer object per address: kit refuses two distinct signers for the same account.
+    const source = req.from.kind === "inventory" ? payer : await this.keys.signer(req.from);
     // Only the associated token account is spent; funds in other token accounts need manual handling.
-    const bal = await this.connection.getTokenAccountBalance(ata, "confirmed");
+    const bal = await this.rpc.getTokenAccountBalance(await this.ata(source.address), { commitment: "confirmed" }).send();
     const balance = BigInt(bal.value.amount);
     const amount = req.amount === "all" ? balance : req.amount;
     if (amount <= 0n) throw new Error("nothing to send");
     if (amount > balance) throw new Error(`insufficient ${this.asset} in the associated token account: have ${balance}, need ${amount}`);
 
-    const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash("confirmed");
-    const tx = this.buildTransfer(source, payer, req.to, amount, blockhash);
-    const signature = await this.connection.sendRawTransaction(tx.serialize());
-    const res = await this.connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-    if (res.value.err) throw new Error(`solana transfer ${signature} failed: ${JSON.stringify(res.value.err)}`);
+    const { value: lifetime } = await this.rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+    const { transaction } = await this.buildTransfer(source, payer, req.to, amount, lifetime);
+    const signature = getSignatureFromTransaction(transaction);
+    await this.rpc
+      .sendTransaction(getBase64EncodedWireTransaction(transaction), { encoding: "base64", preflightCommitment: "confirmed" })
+      .send();
+    await this.waitConfirmed(signature, lifetime.lastValidBlockHeight);
     return { txid: signature, amount, fee: BigInt(FEE_ESTIMATE_LAMPORTS) };
+  }
+
+  /** Poll until confirmed; fail on a transaction error or once the blockhash has expired. */
+  private async waitConfirmed(signature: ReturnType<typeof getSignatureFromTransaction>, lastValidBlockHeight: bigint) {
+    const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const { value: [status] } = await this.rpc.getSignatureStatuses([signature]).send();
+      if (status?.err) throw new Error(`solana transfer ${signature} failed: ${JSON.stringify(status.err)}`);
+      if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") return;
+      const height = await this.rpc.getBlockHeight({ commitment: "confirmed" }).send();
+      if (height > lastValidBlockHeight) throw new Error(`solana transfer ${signature} expired before confirmation`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    throw new Error(`solana transfer ${signature} not confirmed after ${CONFIRM_TIMEOUT_MS / 1000}s`);
   }
 }

@@ -92,7 +92,7 @@ function createMockWallets(cfg: Config): Wallets {
   for (const { asset } of tokens(cfg)) {
     const addressFor = isEvmChain(asset.chain) ? evmAddress
       : asset.chain === "TRON" ? (i: number) => tron.account({ kind: "deposit", index: i }).address
-      : (i: number) => sol.keypair({ kind: "deposit", index: i }).publicKey.toBase58();
+      : (i: number) => sol.address({ kind: "deposit", index: i });
     wallets[asset.id] = new MockWallet(asset.id, asset.chain, 0n, mockGas[asset.chain], addressFor, GAS_ASSET[asset.chain]);
   }
   return wallets;

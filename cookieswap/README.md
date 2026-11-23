@@ -93,9 +93,9 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 64 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
+npm test            # 67 tests: engine, review gate, stablecoin flows, BTC/ERC-20/Tron/Solana wallets
 npm run typecheck
-npm run smoke       # read-only check of the live BTC/ETH backends (throwaway key)
+npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
 Mock mode uses **live DEX quotes and live prices** but simulated deposits and sends.
 For real configs copy `.env.example` to `.env` and run `npm start`.
@@ -113,7 +113,7 @@ For real configs copy `.env.example` to `.env` and run `npm start`.
 | `src/chains/evm.ts` | Shared RPC + HD accounts via viem; THORChain memo goes in tx `data` |
 | `src/chains/erc20.ts` | ERC-20 on Ethereum/BSC/Polygon/Base/Arbitrum: `balanceOf` deposits, native gas top-up, `transfer` |
 | `src/chains/tron.ts`, `tronTx.ts` | TRC-20 via TronGrid; local protobuf tx encoding + secp256k1 signing; TRX top-up for energy |
-| `src/chains/solana.ts` | SPL via JSON-RPC; SLIP-0010 keys; inventory pays fees and recipient token-account rent |
+| `src/chains/solana.ts` | SPL on `@solana/kit` + `@solana-program/token`; SLIP-0010 keys; inventory pays fees and recipient token-account rent |
 | `src/chains/xmr.ts` | `monero-wallet-rpc`: a subaddress per order, inventory = subaddress 0 |
 | `src/chains/mock.ts` | Mock chains and the `DryRunWallet` decorator |
 | `src/screening.ts` | Screening hook (denylist; plug in a sanctions/analytics provider) |
@@ -177,7 +177,8 @@ Lessons taken from Wagyu's incidents (see `../plan/05-wagyu-analysis.md`):
 - **Prices.** The oracle deviation guard blocks quotes when price sources disagree. If every source fails, the price is dropped rather than served stale, and orders wait.
 - **USDC and USDT can be frozen by their issuers** (Circle / Tether blacklist addresses). Your hot wallet holds them while an order runs and as inventory, so keep stable balances low and sweep often.
 - **Gas top-ups wait for a receipt** (up to 3 min). The engine processes orders one by one, so a slow top-up delays other orders. Fine for a prototype; use a worker queue for volume.
-- **Solana dependency.** `npm audit` reports 9 issues, all inside `@solana/web3.js` v1 and its dependencies (3 high, incl. `bigint-buffer`). **Migrate to `@solana/kit` before enabling Solana deposits live.**
+- **Dependencies.** `npm audit --omit=dev` reports **0 vulnerabilities**. Solana moved from `@solana/web3.js` v1, which had 9 findings, to `@solana/kit` 8.6.
+  A signed transfer was simulated on mainnet with signature verification on; it only failed on the unfunded throwaway fee payer.
 - **Tron.** Transactions are built and signed locally (the node cannot alter them). Tron confirmations use solidified blocks (`/walletsolidity`).
 - **Defaults are safe.** `DRY_RUN=true` and `CHAINS=mock` are the defaults. Live mainnet refuses to start without `ADMIN_TOKEN`.
 - **Still to add for production:**
@@ -197,7 +198,6 @@ Running this for the public without a licence is not legal there. Get legal advi
 ## Next steps
 - **XMR rebalancing via atomic swaps.** Add the fork's taker (BTC → XMR from eigenwallet makers) as a route, and run an `asb` to sell surplus XMR. This needs a headless taker API in the Rust fork.
 - **THORChain XMR as input.** Monero deposits to THORChain need the memo in `tx_extra`, which `monero-wallet-rpc` cannot set. A custom signer is needed.
-- **Migrate Solana to `@solana/kit`** (clears all current `npm audit` findings).
 - **Cheaper Tron forwards.** Stake TRX for energy, or rent it, instead of burning ~15 TRX per USDT forward.
 - **Remaining networks.** Arbitrum-USDT and Hyperliquid-USDC, once a DEX route or wallet type exists.
 - **THORChain for token deposits.** Add `approve` + `router.depositWithExpiry`, so stable deposits can also use THORChain pools.
