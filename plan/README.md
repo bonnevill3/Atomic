@@ -1,17 +1,18 @@
-# Atomic: XMR ⇄ BTC/ETH atomic swaps
+# Plan: eigenwallet-fork met ETH → XMR
 
-> **Status: planfase.** Er is nog geen code. Gebruik niets uit deze repo met echt geld.
+> **Status:** de fork van eigenwallet/core is gemaakt (zie [FORK.md](FORK.md)). Er is nog geen eigen code. BTC → XMR werkt zoals upstream, en ETH → XMR moet nog gebouwd worden. Gebruik niets uit deze fork met echt geld zonder eigen tests en een audit.
 
-Doel: een eigenwallet-achtige app waarmee je **Monero (XMR) verkoopt voor Bitcoin (BTC) of Ethereum (ETH)** via een trustless atomic swap. Er is geen exchange, geen account en geen tussenpartij, en de swap loopt p2p over Tor. De interface is een terminal-UI (TUI), met optioneel een basis-GUI.
+**Richting:** één richting, net als eigenwallet. De **taker** koopt XMR met BTC (bestaat al) of **ETH** (nieuw). De **maker** (`asb`) verkoopt XMR.
 
-## Documentatie
-1. [Vergelijkbare projecten](docs/01-vergelijkbare-projecten.md): eigenwallet, AthanorLabs, BasicSwap, Farcaster, Haveno, Bisq, Serai. Wat je ervan kunt leren en hergebruiken.
-2. [Hoe het protocol werkt](docs/02-protocol.md): key-splitting, adaptor signatures, DLEQ, het ETH-contract, en de refund- en punish-paden.
-3. [Stappenplan](docs/03-stappenplan.md): architectuur, tech-stack, fases 0–9 met "klaar wanneer"-criteria, en TUI-ontwerp.
-4. [Beveiliging](docs/04-beveiliging.md): threat model en checklist.
+## Documenten
+1. [Vergelijkbare projecten](01-vergelijkbare-projecten.md): eigenwallet, AthanorLabs, BasicSwap, Farcaster, Haveno, Bisq, Serai.
+2. [Hoe het protocol werkt](02-protocol.md): key-splitting, adaptor signatures, DLEQ, het ETH-contract, en de refund- en punish-paden.
+3. [Stappenplan](03-stappenplan.md): de fases om ETH → XMR in deze fork te bouwen.
+4. [Beveiliging](04-beveiliging.md): threat model en checklist.
+5. [Fork-administratie](FORK.md): upstream, wijzigingen, upstream bijhouden, bouwen.
 
-## De belangrijkste conclusies
-- **Wat jij wilt (XMR → BTC) doet eigenwallet al aan de maker-kant (`asb`).** De eigenwallet-app zelf werkt alleen andersom: BTC erin, XMR eruit. Nieuw zijn bij jou (1) **ETH** en (2) een app waarmee een XMR-verkoper als **taker** handelt.
-- **De chain met scripts (BTC/ETH) lockt altijd eerst en XMR als tweede.** Dat is gunstig voor jou als XMR-verkoper, maar je moet online blijven tot de swap klaar is.
-- **Voor ETH ⇄ XMR is er geen onderhouden referentie.** AthanorLabs is sinds sept 2026 gearchiveerd en nooit geaudit. Het ETH-contract is dus nieuw werk en moet geaudit worden.
-- **Aanbevolen route:** forken van [eigenwallet/core](https://github.com/eigenwallet/core) (Rust, GPL-3.0). Daarna een ETH-module, de XMR-verkoper-als-taker-flow en een `ratatui`-TUI toevoegen.
+## Belangrijkste punten
+- **BTC → XMR hoef je niet te bouwen.** Dat is precies wat eigenwallet doet en wat je nu in de fork hebt. Interface: de taker koopt via de Tauri-GUI en beheert swaps met de `swap` CLI. De maker gebruikt `asb` met de `asb-controller` REPL in de terminal.
+- **Het echte werk is ETH → XMR.** Dat betekent een nieuw smart contract, een ETH-wallet in maker en taker, een nieuwe state machine, nieuwe p2p-berichten, en ETH in de GUI.
+- **Voor ETH ⇄ XMR is er geen onderhouden referentie.** AthanorLabs is gearchiveerd en niet geaudit. Het contract moet dus grondig getest en geaudit worden.
+- **Bijkomend voordeel van deze richting:** de ETH-kant (taker) heeft zelf ETH en kan dus gas betalen. De maker krijgt ETH binnen via `claim()` en moet daarvoor een klein beetje ETH voor gas aanhouden. Een relayer is daardoor niet nodig.

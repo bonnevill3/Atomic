@@ -35,8 +35,9 @@
 - [ ] Checks-effects-interactions, reentrancy-guard, en geen `tx.origin`.
 - [ ] Een swap kan maar één keer worden afgewikkeld (claim **of** refund), afgedwongen in de contract-state.
 - [ ] Scalar `s` controleren: `0 < s < n`. Ook afvangen dat `ecrecover` het nul-adres teruggeeft.
-- [ ] Relayer-handtekening (EIP-712) bevat chain-id, contractadres, swap-id, fee en nonce, als bescherming tegen replay.
-- [ ] Claim ruim vóór `t1`, met minstens enkele uren marge.
+- [ ] (Alleen als je later een relayer toevoegt) de EIP-712-handtekening bevat chain-id, contractadres, swap-id, fee en nonce, als bescherming tegen replay.
+- [ ] De maker claimt direct na `setReady`, en lockt alleen XMR als er nog ruim tijd is tot `t1`.
+- [ ] `claim` alleen na `setReady` (eigenwallet-model, zie [02-protocol.md](02-protocol.md)). Een taker die offline is, mag geen ETH kunnen verliezen vóór `t2`.
 - [ ] Foundry fuzz- en invariant-tests, Slither, en een externe audit.
 
 ### Monero
@@ -50,7 +51,7 @@
 - [ ] **Write-ahead:** sla de nieuwe toestand op (in een DB-transactie) **vóór** elk bericht of elke transactie.
 - [ ] Na een herstart worden alle lopende swaps automatisch hervat.
 - [ ] Elke toestand heeft een "deadline-actie": wat de daemon doet als een timelock nadert.
-- [ ] Crash-tests in elke toestand (zie fase 3).
+- [ ] Crash-tests in elke toestand (zie fase 4 in het stappenplan, en de bestaande `swap/tests`).
 - [ ] Herstel uit seed + DB-backup getest. De DB bevat geheimen, dus backups versleutelen.
 
 ### Netwerk en privacy

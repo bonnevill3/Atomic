@@ -10,14 +10,14 @@ Monero heeft geen scripts: er bestaan geen hashlocks of timelocks zoals bij Bitc
 3. **Cross-group DLEQ-bewijs.** Monero gebruikt ed25519, Bitcoin en Ethereum gebruiken secp256k1. Elke partij bewijst dat haar sleuteldeel op beide curves *hetzelfde getal* is. Zonder dit bewijs kan een tegenpartij een "nep"-sleutel gebruiken en verlies je je XMR. **Dit bewijs moet je altijd controleren.**
 
 ## Gouden regel: de chain met scripts lockt eerst
-In alle bestaande protocollen (eigenwallet, BasicSwap, AthanorLabs) lockt de **BTC/ETH-kant eerst** en de **XMR-kant als tweede**. Voor jou als XMR-verkoper betekent dat:
+In alle bestaande protocollen (eigenwallet, BasicSwap, AthanorLabs) lockt de **BTC/ETH-kant eerst** en de **XMR-kant als tweede**. In deze fork is de XMR-kant de **maker** (`asb`, dat ben jij) en de BTC/ETH-kant de **taker** (de app-gebruiker). Voor de maker betekent dat:
 
 - ✅ Je lockt je XMR pas als de BTC/ETH aantoonbaar (en definitief) vastligt.
 - ⚠️ Na je XMR-lock moet je **online zijn** om de BTC/ETH op tijd op te halen, vóór de cancel-timelock (BTC) of vóór `t_1` (ETH).
 - ⚠️ Mis je dat venster, dan is er geen ramp: de tegenpartij refundt, onthult daarbij haar sleuteldeel, en jij haalt je XMR terug. Wel heb je dan tijd en fees verloren.
 
 ### Let op: namen Alice/Bob verschillen per project
-| | XMR-verkoper (jij) | BTC/ETH-kant |
+| | XMR-kant = maker (jij) | BTC/ETH-kant = taker |
 |---|---|---|
 | Gugger / eigenwallet (BTC) | **Alice** (maker, `asb`) | **Bob** (taker, `swap`) |
 | AthanorLabs (ETH) | **Bob** | **Alice** |
@@ -40,8 +40,8 @@ In dit project gebruiken we daarom **"XMR-kant"** en **"BTC-kant"/"ETH-kant"**, 
 
 ```mermaid
 sequenceDiagram
-    participant X as XMR-kant (jij)
-    participant B as BTC-kant
+    participant X as XMR-kant (maker, asb)
+    participant B as BTC-kant (taker)
     participant BTC as Bitcoin
     participant XMR as Monero
 
@@ -68,56 +68,66 @@ sequenceDiagram
 - **De BTC-kant refundt niet vóór `T2`.** Dan doet de XMR-kant `TxPunish` en krijgt de BTC. De XMR blijft vastzitten, tenzij de XMR-kant vrijwillig `s_xmr` deelt ("cooperative redeem").
 - **De XMR-kant redeemt te laat (na `TxCancel`).** `TxRedeem` is dan ongeldig, en het verloop wordt de refund-route hierboven.
 
-## Protocol B: XMR ⇄ ETH (gebaseerd op AthanorLabs)
+## Protocol B: ETH → XMR (contract naar eigenwallet-model)
 
-**Voorgesteld contract** (eigen ontwerp naar het voorbeeld van AthanorLabs' `SwapCreator`): één contract voor alle swaps, met per swap een struct. De functies:
+Het contract volgt de **semantiek van eigenwallet**, niet die van AthanorLabs. Zie de toelichting onder de tabel.
 
-- `newSwap(claimCommitment, refundCommitment, claimer, t0, t1, value)`: de ETH-kant lockt ETH (of een ERC-20).
-- `setReady(swap)`: de ETH-kant geeft aan dat de XMR klopt.
-- `claim(swap, s)`: de XMR-kant ontvangt de ETH en onthult daarmee `s_xmr`.
-- `refund(swap, s)`: de ETH-kant krijgt ETH terug en onthult daarmee `s_eth`.
-- Het contract controleert `s·G == commitment` op secp256k1 met de goedkope *ecrecover-truc*. Dankzij het DLEQ-bewijs is dat dezelfde `s` als op ed25519.
+**Voorgesteld contract** (`contracts/SwapCreator.sol`): één contract voor alle swaps, met per swap een struct.
+
+| Functie | Wie | Toegestaan wanneer | Onthult | Vergelijkbaar met (BTC) |
+|---|---|---|---|---|
+| `newSwap(...)` | taker | start: ETH in het contract, met commitments op beide secp256k1-pubkeys, `t1`, `t2`, en het vaste maker-adres | – | `TxLock` |
+| `setReady(id)` | taker | nadat de taker de XMR-lock heeft gecontroleerd, vóór `t1` | – | encsig sturen |
+| `claim(id, s_maker)` | maker | na `setReady`, vóór `t1` | `s_maker` → de taker krijgt de XMR | `TxRedeem` |
+| `refund(id, s_taker)` | taker | vóór `setReady`, **of** na `t1` | `s_taker` → de maker krijgt zijn XMR terug | `TxCancel` + `TxRefund` |
+| `punish(id)` | maker | na `t2` als er nog niets is afgewikkeld | niets | `TxPunish` |
+
+- Het contract controleert `s·G == commitment` op secp256k1 met de goedkope *ecrecover-truc*. Dankzij het DLEQ-bewijs is dat dezelfde `s` als op ed25519. Het bestaande DLEQ-bewijs van eigenwallet (secp256k1 ↔ ed25519) is daarvoor direct bruikbaar.
+- Uitbetaling gaat altijd naar de **vooraf vastgelegde** adressen (de maker bij claim en punish, de taker bij refund), nooit naar `msg.sender`.
+
+**Waarom niet het AthanorLabs-model?** Bij AthanorLabs mag de XMR-kant na `t0` ook *zonder* `setReady` claimen. Dan moet de ETH-kant vóór `t0` online zijn om een foute of ontbrekende XMR-lock te zien en te refunden. Een oneerlijke maker zou anders ETH kunnen pakken zonder XMR te locken, terwijl de taker de app dicht heeft. In het eigenwallet-model betaalt de taker pas na een **actieve bevestiging** (`setReady`, net als het sturen van de encsig bij BTC). De taker loopt alleen risico als hij langer dan `t2` offline blijft, en dan refundt de app automatisch zodra hij weer draait. Dat is hetzelfde risicoprofiel als eigenwallet nu heeft.
 
 ```mermaid
 sequenceDiagram
-    participant X as XMR-kant (jij)
-    participant E as ETH-kant
+    participant X as XMR-kant (maker, asb)
+    participant E as ETH-kant (taker)
     participant C as Swap-contract
     participant XMR as Monero
 
     X->>E: pubkeys + DLEQ-bewijs
     E->>X: pubkeys + DLEQ-bewijs
-    E->>C: newSwap met commitments, t0, t1 en ETH
+    E->>C: newSwap met commitments, t1, t2 en ETH
     Note over X: controleert contract, bedrag en timeouts, wacht op finalized blok
     X->>XMR: lockt XMR op adres (S_xmr + S_eth)
+    X->>E: transfer proof van de XMR-lock
     Note over E: controleert via view key, wacht 10 confirmaties
     E->>C: setReady
-    X->>C: claim met s_xmr (of via relayer)
+    X->>C: claim met s_xmr
     Note over E: leest s_xmr uit de calldata
     E->>XMR: s_xmr + s_eth geeft de XMR vrij
 ```
 
-**Timeouts** (AthanorLabs-semantiek):
-- **Vóór `setReady` en vóór `t_0`** mag de ETH-kant refunden, bijvoorbeeld als de XMR-lock niet klopt.
-- **Na `setReady`, of na `t_0`, en vóór `t_1`** mag alleen de XMR-kant claimen.
-- **Na `t_1`** mag de ETH-kant refunden. Dat onthult `s_eth`, zodat de XMR-kant haar XMR terughaalt.
+**Wat kan er misgaan?**
+- **De maker lockt nooit XMR.** De taker refundt (vóór `setReady`), onthult `s_taker`, en dat schaadt niemand.
+- **De XMR-lock klopt niet.** De taker roept geen `setReady` aan maar refundt. De maker haalt eventueel gelockte XMR terug met `s_taker`.
+- **De maker claimt niet vóór `t1`.** De taker refundt na `t1` en de maker haalt zijn XMR terug.
+- **De taker doet niets tot `t2`.** De maker punisht en krijgt de ETH. De XMR blijft vastzitten, tenzij de maker vrijwillig `s_maker` deelt (cooperative redeem, zoals bij BTC).
 
-**Twee ETH-specifieke punten:**
-1. **Gas.** Wie alleen XMR heeft, heeft geen ETH voor `claim()`. Bouw `claimRelayer`: de XMR-kant ondertekent een EIP-712-bericht en een relayer dient het in tegen een kleine fee uit de swap.
-2. **Race rond `t_1`.** `claim` en `refund` kunnen elkaar in de mempool kruisen. Claim dus **ruim** vóór `t_1`, met een marge van minimaal enkele uren.
+**ETH-specifieke punten:**
+1. **Gas.** De maker roept `claim()` aan en heeft daarvoor ETH nodig. Na de eerste swap heeft de maker ETH, dus houd een kleine gas-buffer aan in de asb-wallet en laat de asb waarschuwen als die te laag wordt. Een relayer is in deze richting niet nodig.
+2. **Races rond `t1`.** `claim` en `refund` kunnen elkaar rond `t1` in de mempool kruisen. De maker claimt dus **direct** na `setReady`, en de maker lockt alleen XMR als er nog ruim tijd is tot `t1`.
+3. **Finality.** De maker lockt pas XMR na een **finalized** blok (~13 min) met de `newSwap`.
 
 ---
 
-## Marktrol ≠ protocolrol: wie plaatst de offer?
+## Gekozen marktrol: net als eigenwallet
 
-"Wie eerst lockt" (protocol) staat los van "wie de offer plaatst" (markt). Voor een XMR-verkoper zijn er twee productvormen:
+"Wie eerst lockt" (protocol) staat los van "wie de offer plaatst" (markt). Er waren twee opties:
 
-| | **Vorm 1: jij bent maker** | **Vorm 2: jij bent taker** |
+| | **Gekozen: XMR-kant is maker** | Niet gekozen: XMR-kant is taker |
 |---|---|---|
-| Hoe het werkt | Jij publiceert koersen en kopers met BTC/ETH komen naar jou | Jij kiest een offer van een maker die BTC/ETH heeft |
-| Lijkt op | eigenwallet **asb** | eigenwallet-**app**, maar omgekeerd. BasicSwap "reversed" |
-| Wie lockt eerst | de koper (taker) | de maker (op jouw verzoek) |
-| Probleem | jij moet 24/7 online zijn | **free option / griefing**: jij kunt de maker laten locken en dan afhaken. Makers willen daar bescherming tegen. |
-| Moeilijkheid | lager (protocol is bewezen) | hoger (anti-spam nodig, bijv. upfront fee, reputatie of rate-limits) |
+| Hoe het werkt | De maker (`asb`) publiceert koersen. Takers met BTC/ETH kiezen een maker en locken eerst. | De taker met XMR laat een BTC/ETH-maker eerst locken. |
+| Voorbeeld | eigenwallet | BasicSwap "reversed" |
+| Probleem | De maker moet 24/7 online zijn. Takers kunnen liquiditeit vastzetten (eigenwallet gebruikt een anti-spam-borg). | Free option en griefing tegen de maker. Een apart protocol is nodig. |
 
-**Advies:** bouw één state machine voor de *XMR-kant*, die voor beide marktrollen werkt (zoals Farcaster). Begin met de **taker-UI** (vorm 2), omdat je een eigenwallet-achtige app wilt. Zorg vanaf dag 1 dat de **maker-kant** (BTC/ETH-houder) beschermd is: rate-limits, een maximumbedrag per onbekende peer, en optioneel een kleine anti-spam-fee. Een gratis swap-aanvraag die een lock afdwingt is een DoS-vector.
+Deze fork gebruikt de eerste optie, dus alles wat eigenwallet al heeft blijft bruikbaar: de rendezvous-discovery, quotes, de anti-spam-borg, de `asb` en de `asb-controller`.

@@ -1,207 +1,152 @@
-# 3. Stappenplan
+# 3. Stappenplan: ETH → XMR toevoegen aan de eigenwallet-fork
 
-Doel: een app waarmee je **XMR verkoopt voor BTC of ETH** via een atomic swap, zonder tussenpartij, met dezelfde aanpak als eigenwallet (p2p over Tor, refund- en punish-routes, automatisch herstel). De interface is een **TUI** (terminal), met optioneel een heel eenvoudige GUI.
+**Uitgangspunt:** de fork bevat al alles voor BTC → XMR, in één richting zoals eigenwallet. De taker koopt XMR, de maker (`asb`) verkoopt XMR. Dit plan voegt **ETH → XMR** toe in precies dezelfde richting en met hetzelfde veiligheidsmodel.
 
-## Eerst kiezen: route A of route B
+**Interface:** die is er al.
+- **Maker:** `asb` met de `asb-controller` REPL in de terminal.
+- **Taker:** de Tauri-GUI om te kopen, en de `swap` CLI om te beheren (`history`, `resume`, `cancel-and-refund`, …).
+- Optioneel later: een `ratatui`-dashboard voor de asb (zie fase 7).
 
-| | **Route A: fork van eigenwallet/core (aanbevolen)** | **Route B: eigen codebase** |
+Grove doorlooptijd: **~4–7 maanden** voor één ervaren Rust-ontwikkelaar tot testnet-klaar, exclusief de externe audit.
+
+## Waar ETH in de bestaande code komt
+
+| Crate / map | Bestaat al (BTC) | Toevoegen (ETH) |
 |---|---|---|
-| BTC-leg | bestaat al en is in productie getest | zelf bouwen met `ecdsa_fun`, `sigma_fun` en `bdk` |
-| Monero-wallet, p2p, Tor, DB | bestaat al | zelf bouwen |
-| Wat jij bouwt | ETH-leg, XMR-verkoper-als-taker-flow, TUI | alles |
-| Licentie | **verplicht GPL-3.0** | vrij te kiezen (let op de licenties van dependencies) |
-| Nadeel | grote codebase (~35 crates) om te leren, upstream bijhouden | veel meer werk, meer kans op fatale fouten |
-| Grove doorlooptijd* | ~4–7 maanden tot testnet-klaar | ~8–14 maanden tot testnet-klaar |
-
-\* Schatting voor één ervaren Rust-ontwikkelaar, exclusief externe audit.
-
-**Advies: route A.** De gevaarlijkste code (adaptor signatures, DLEQ, het BTC-protocol, Monero-integratie) is daar al jaren met echt geld in gebruik. Bouw zelf alleen wat nog niet bestaat.
-
-## Architectuur
-
-```
-            ┌───────────────┐   JSON-RPC    ┌──────────────────────────────┐
-  jij  ───▶ │ atomic-tui    │◀────────────▶ │ atomicd (daemon)             │
-            │ atomic-cli    │  (unix sock)  │  ├─ protocol: state machines │
-            │ (gui: egui)   │               │  ├─ db: SQLite (swap-state)  │
-            └───────────────┘               │  ├─ p2p: libp2p over Tor     │
-                                            │  ├─ chain-btc  (Electrum)    │
-                                            │  ├─ chain-xmr  (wallet)      │
-                                            │  └─ chain-eth  (RPC + contr.)│
-                                            └──────────────────────────────┘
-```
-
-- **Daemon en UI zijn gescheiden** (net als eigenwallet `asb` + `swap-controller` en Haveno daemon + UI). Crasht of sluit de TUI, dan loopt de swap gewoon door. Een GUI is later "gewoon een extra client".
-- **Elke swap is een state machine** die vóór elke uitgaande actie (bericht of transactie) zijn nieuwe toestand opslaat in SQLite. Na een herstart gaat hij verder waar hij was.
-
-### Modules / crates
-
-```
-atomic/
-├── crates/
-│   ├── core-crypto/   # sleutels, key-split, DLEQ, adaptor signatures, zeroize
-│   ├── chain-btc/     # wallet, Lock/Redeem/Cancel/Refund/Punish, watcher
-│   ├── chain-xmr/     # wallet, gedeeld adres, lock-verificatie, sweep
-│   ├── chain-eth/     # contract-bindings, finality-watcher, relayer-client
-│   ├── protocol/      # state machines: XMR-kant en BTC/ETH-kant per paar
-│   ├── p2p/           # libp2p, berichten (geversioneerd), rendezvous, Tor
-│   ├── db/            # SQLite + migraties
-│   └── daemon/        # atomicd: orkestratie + JSON-RPC
-├── contracts/         # Solidity + Foundry-tests
-├── apps/
-│   ├── cli/           # atomic-cli (clap)
-│   ├── tui/           # atomic-tui (ratatui)
-│   └── gui/           # optioneel: egui/eframe
-└── dev/               # docker-compose: bitcoind, monerod, anvil
-```
-
-In route A koppel je deze aan de bestaande eigenwallet-crates (`swap-core`, `swap-machine`, `swap-db`, `swap-p2p`, `bitcoin-wallet`, `monero-wallet`, …). Je voegt dan vooral `chain-eth`, `contracts/` en `apps/tui` toe.
-
-### Tech-stack (Rust)
-
-| Onderdeel | Keuze | Waarom |
-|---|---|---|
-| Async | `tokio` | standaard, gebruikt door eigenwallet |
-| BTC | `bitcoin`, `bdk_wallet` + Electrum | eigenwallet-aanpak, light client |
-| Adaptor signatures | `ecdsa_fun` (feature `adaptor`) | gebruikt door xmr-btc-swap/eigenwallet |
-| Cross-curve DLEQ | `sigma_fun` (ed25519 + secp256k1) | idem, **niet zelf schrijven** |
-| Monero | `monero-wallet-rpc` om te beginnen, later `monero-oxide` | snel starten, later pure Rust |
-| ETH | `alloy` + Solidity/Foundry (`forge`, `anvil`) | modern, goede test- en fuzz-tools |
-| P2P | `rust-libp2p` (request-response, rendezvous, noise) + Tor (`arti`) | zoals eigenwallet |
-| Opslag | `sqlx` + SQLite | eenvoudig, transacties |
-| CLI / TUI / GUI | `clap` / `ratatui` + `crossterm` / `egui` | TUI eerst. egui is de simpelste GUI in pure Rust |
-| Tests | `cargo nextest`, `proptest`, `cargo-fuzz`, Foundry fuzz/invariant | |
+| `contracts/` (nieuw) | – | `SwapCreator.sol` + Foundry-tests |
+| `ethereum-wallet/` (nieuw) | vgl. `bitcoin-wallet/`, `electrum-pool/` | ETH-wallet met `alloy`: sleutels uit de bestaande seed (`swap/src/seed.rs`), RPC-pool, finality-watcher |
+| `swap-core/` | `bitcoin/` (lock, redeem, refund, …), `monero/` | `ethereum/`: contract-bindings, commitments, calldata |
+| `swap-machine/` | `AliceState`, `BobState` | **aparte** enums voor ETH-swaps (bijv. `AliceEthState`/`BobEthState`), zodat het BTC-pad niet geraakt wordt |
+| `swap/src/protocol/` | `alice/swap.rs`, `bob/swap.rs` | `alice/swap_eth.rs`, `bob/swap_eth.rs` |
+| `swap-p2p/src/protocols/` | `swap_setup`, `quote(s)`, `transfer_proof`, `encrypted_signature`, … | `swap_setup` en quotes uitbreiden met een **paar**-veld (BTC of ETH). `transfer_proof` hergebruiken. `encrypted_signature` is bij ETH niet nodig, want `setReady` gaat on-chain. |
+| `swap-db/` + `.sqlx/` | swap-states | migraties voor ETH-states. Daarna `just generate-sqlx-cache` |
+| `swap-env/` | config + defaults | ETH-RPC-URL's, finality-instelling, timeouts `t1`/`t2`, contractadres per netwerk |
+| `swap-feed/` | XMR/BTC-koers | XMR/ETH-koers (bijv. via XMR/BTC × BTC/ETH, mediaan van bronnen) |
+| `swap/src/asb/` + `swap-controller(-api)` | BTC-saldo, opnemen, … | ETH-saldo, ETH opnemen, waarschuwing bij een te lage gas-buffer |
+| `swap/src/cli/` + `src-tauri/` + `src-gui/` | BTC kiezen en storten | **ETH kiezen**, ETH-wallet, contract-status en refund-knop |
+| `swap/tests/` + `monero-harness/` | docker-tests met bitcoind + monerod | `anvil`-container erbij, plus ETH-varianten van de belangrijkste tests |
 
 ---
 
 ## Fases
 
-Elke fase eindigt met een **"klaar wanneer"**. Ga pas door als dat echt klopt.
+Elke fase eindigt met **"klaar wanneer"**. Ga pas door als dat echt klopt.
 
-### Fase 0: Leren en beslissen (1–2 weken)
-- [ ] Lees de leeslijst in [01-vergelijkbare-projecten.md](01-vergelijkbare-projecten.md) en [02-protocol.md](02-protocol.md).
-- [ ] Installeer eigenwallet en doe een swap op **testnet/stagenet**.
-- [ ] Draai lokaal een `asb` (de XMR-verkoper).
-- [ ] Lees in eigenwallet/core de state machine (`swap-machine`, `swap-core`) en volg één swap in de logs.
-- [ ] Kies route A of B en de licentie.
+### Fase 0: De fork leren kennen (1–2 weken)
+- [ ] `git submodule update --init --recursive`, daarna `just swap` (de eerste build van `monero-sys` duurt lang).
+- [ ] `just docker_test happy_path` en `just docker_test alice_refunds_after_restart_bob_refunded` draaien.
+- [ ] Testnet: `just asb-testnet` + `just asb-testnet-controller` als maker, en `just gui` als taker. Doe één swap met jezelf.
+- [ ] Lees `swap-machine/src/alice/mod.rs` en `bob/mod.rs` (de states) en `swap/src/protocol/{alice,bob}/swap.rs` (de overgangen).
+- [ ] Bekijk hoe `swap_setup` de sleutels en DLEQ-bewijzen uitwisselt. Dat hergebruik je voor ETH.
 
-**Klaar wanneer:** je elke transactie uit protocol A kunt uitleggen (wie, wanneer, waarom) en je een testswap hebt gedaan.
+**Klaar wanneer:** de docker-tests lokaal groen zijn, je een testnet-swap hebt gedaan, en je elke BTC-state kunt uitleggen.
 
-### Fase 1: Lokale ontwikkelomgeving (1 week)
-- [ ] `dev/docker-compose.yml` met `bitcoind -regtest` + `electrs`, `monerod --regtest` + `monero-wallet-rpc`, en `anvil`.
-- [ ] Scripts om blokken te minen en wallets te vullen (`just up`, `just mine 10`, `just fund`).
-- [ ] CI (GitHub Actions) die deze stack start en de integratietests draait.
+### Fase 1: ETH-specificatie (1–2 weken)
+- [ ] Schrijf `plan/05-eth-spec.md`:
+  - contract-interface en de regels uit [02-protocol.md](02-protocol.md)
+  - de states van maker en taker
+  - p2p-berichten
+  - timeouts (`t1`, `t2`, vergelijkbaar met de cancel- en punish-timelocks)
+  - finality-regels
+- [ ] Beslissingen vastleggen:
+  - alleen native ETH in v1 (ERC-20 later)
+  - eigenwallet-semantiek (`claim` alleen na `setReady`)
+  - geen relayer
+- [ ] Bepaal welke eigenwallet-features je voor ETH overslaat in v1: anti-spam-borg/partial refund, developer tip, Hermes/Apollo.
 
-**Klaar wanneer:** één commando de hele stack start en een test BTC, XMR en ETH kan versturen.
+**Klaar wanneer:** de spec voor elke state zegt wat er gebeurt bij elke deadline en elke crash.
 
-### Fase 2: Crypto-kern (2–4 weken; route A: vooral integreren)
-- [ ] Monero key-split: per swap `s_xmr` genereren, gedeeld adres `S_xmr + S_ander` en gedeelde view key.
-- [ ] DLEQ-bewijzen maken en verifiëren, met **negatieve tests** (fout bewijs → swap afbreken).
-- [ ] BTC adaptor signatures: encsign, verify, decrypt en secret recovery.
-- [ ] ETH-commitment-formaat dat exact overeenkomt met het contract.
-- [ ] Sleutels per swap deterministisch afleiden uit de seed + swap-id (herstel uit seed + DB).
-- [ ] Geheimen `zeroize`n en nooit loggen.
-
-**Klaar wanneer:** property-tests aantonen dat geheimen altijd terug te halen zijn uit een on-chain handtekening of claim, en dat ongeldige bewijzen altijd worden afgewezen.
-
-### Fase 3: BTC-leg (4–8 weken; route A: 1–3 weken)
-- [ ] Transacties: `TxLock`, `TxRedeem`, `TxCancel`, `TxRefund`, `TxPunish` (2-van-2 P2WSH, relatieve timelocks).
-- [ ] State machines voor de XMR-kant en de BTC-kant.
-- [ ] Watchers voor BTC (Electrum) en XMR.
-- [ ] Integratietests op regtest voor **elk** pad:
-  - happy path
-  - XMR nooit gelockt → refund
-  - XMR gelockt maar geen redeem → refund
-  - punish
-  - cooperative redeem
-- [ ] **Crash-tests:** proces killen (`kill -9`) in elke toestand, herstarten, en de swap moet goed aflopen.
-- [ ] Fee-strategie: fee-schatting en marges op vooraf getekende transacties.
-
-**Klaar wanneer:** alle paden en alle crash-punten groen zijn op regtest.
-
-### Fase 4: ETH-leg (4–8 weken)
-- [ ] `contracts/SwapCreator.sol` met `newSwap`, `setReady`, `claim`, `claimRelayer` en `refund` (zie [02-protocol.md](02-protocol.md)).
-- [ ] Foundry-tests:
+### Fase 2: Smart contract (2–4 weken)
+- [ ] `contracts/` als Foundry-project: `SwapCreator.sol` met `newSwap`, `setReady`, `claim`, `refund` en `punish`.
+- [ ] Tests:
   - unit-tests en fuzzing
-  - invariants: geld kan maar één keer weg, alleen in de juiste tijdvensters, alleen naar het vaste adres
+  - invariants: geld kan maar één keer weg, alleen in de juiste tijdvensters, alleen naar de vaste adressen
   - statische analyse met Slither
-- [ ] Relayer: EIP-712-handtekening met swap-id, fee, chain-id, contractadres en nonce.
-- [ ] Rust-client (`alloy`) plus watcher die alleen op **finalized** blokken vertrouwt.
-- [ ] Dezelfde pad- en crash-tests als in fase 3, eerst op anvil en daarna op Sepolia.
-- [ ] (Later) ERC-20 (bijv. USDC/DAI) met `SafeERC20`, en tokens met fee-on-transfer weigeren.
+- [ ] Controle op `s`: `0 < s < n`, het ecrecover-nul-adres afvangen, en een reentrancy-guard.
+- [ ] Deploy-script voor anvil en Sepolia. CI-job die `forge test` draait.
 
-**Klaar wanneer:** alle paden groen zijn op anvil en minstens 20 swaps op Sepolia + Monero stagenet goed zijn gegaan.
+**Klaar wanneer:** 100% branch coverage op het contract en invariant-tests zonder bevindingen.
 
-### Fase 5: P2P en markt (3–6 weken; route A: grotendeels aanwezig)
-- [ ] libp2p request-response met **geversioneerde** berichten, noise-encryptie en standaard via Tor.
-- [ ] Peers vinden via rendezvous-nodes (zoals eigenwallet).
-- [ ] Quotes: koers (mediaan van meerdere bronnen), min/max bedrag en geldigheidsduur.
-- [ ] Anti-spam aan de BTC/ETH-kant: rate-limits per peer, maximumbedrag voor onbekende peers, en optioneel een kleine upfront fee.
-- [ ] Fuzzing van het parsen van berichten (`cargo-fuzz`).
+### Fase 3: ETH-wallet en core (2–3 weken)
+- [ ] Crate `ethereum-wallet/` (`alloy`): sleutel afgeleid uit de bestaande seed, saldo, transacties sturen, nonce- en fee-beheer (EIP-1559), meerdere RPC-endpoints.
+- [ ] Watcher die alleen `finalized` blokken als definitief behandelt.
+- [ ] `swap-core/src/ethereum/`: commitments uit secp256k1-pubkeys (dezelfde sleutels als in het DLEQ-bewijs), en calldata voor alle contractfuncties.
+- [ ] Unit-tests tegen anvil.
 
-**Klaar wanneer:** twee nodes op verschillende machines elkaar via Tor vinden en een testnet-swap doen.
+**Klaar wanneer:** een test via de Rust-code een volledige `newSwap → setReady → claim` doet op anvil, en ook `refund` en `punish`.
 
-### Fase 6: Interface (2–4 weken)
+### Fase 4: Protocol en state machines (4–6 weken)
+- [ ] `swap_setup` uitbreiden met een paar-veld, **geversioneerd**, zodat oude BTC-takers en -makers blijven werken.
+- [ ] Quotes per paar (BTC en ETH), met min/max per paar.
+- [ ] ETH-states in `swap-machine` en de overgangen in `swap/src/protocol/{alice,bob}/swap_eth.rs`.
+- [ ] Persistentie: elke state eerst opslaan in `swap-db`, dan pas handelen (write-ahead, zoals de bestaande code doet).
+- [ ] Hervatten na herstart, en handmatige commando's (`refund`, `punish`) in CLI en controller.
+- [ ] Docker-tests met anvil, naar het voorbeeld van de bestaande tests:
+  - `eth_happy_path`
+  - `eth_taker_refunds_before_ready` (maker lockt nooit XMR)
+  - `eth_taker_refunds_when_xmr_amount_wrong`
+  - `eth_taker_refunds_after_t1_maker_offline`
+  - `eth_maker_punishes_after_t2_taker_offline`
+  - `eth_restart_maker_after_xmr_locked`
+  - `eth_restart_taker_after_ready`
+  - `eth_concurrent_takers`
 
-**CLI (`clap`):**
+**Klaar wanneer:** alle ETH-docker-tests groen zijn **en** alle bestaande BTC-docker-tests nog groen zijn.
+
+### Fase 5: Maker (asb) (1–2 weken)
+- [ ] Config: ETH-RPC, contractadres, `t1`/`t2`, minimaal en maximaal bedrag per paar.
+- [ ] XMR/ETH-koers in `swap-feed`.
+- [ ] Controller-commando's: `eth-balance`, `withdraw-eth`. Waarschuwing bij een te lage gas-buffer.
+- [ ] Metrics en logs voor ETH-swaps, zonder geheimen.
+
+**Klaar wanneer:** de asb op Sepolia + stagenet zowel BTC- als ETH-offers aanbiedt en afhandelt.
+
+### Fase 6: Taker (CLI + GUI) (2–3 weken)
+- [ ] API: `BuyXmrArgs`/`buy_xmr` in `swap/src/cli/api/request.rs` uitbreiden met ETH. De GUI koopt via deze API.
+- [ ] CLI: `resume`, `cancel-and-refund` en `balance` laten werken voor ETH-swaps.
+- [ ] GUI (`src-gui`):
+  - bij het kiezen van een maker het paar BTC of ETH tonen
+  - ETH-stortingsadres en ETH-saldo
+  - de status van de swap in stappen, met aftelling naar `t1`/`t2`
+- [ ] Duidelijke waarschuwing: **"Houd de app open tot de swap klaar is."** Na een herstart wordt de swap automatisch hervat.
+
+**Klaar wanneer:** een niet-technische tester zonder hulp een ETH → XMR-swap op testnet kan doen.
+
+### Fase 7 (optioneel): Terminal-dashboard voor de maker
+- [ ] `ratatui`-app die via `swap-controller-api` (JSON-RPC) praat met de asb. Ze toont saldi (XMR/BTC/ETH), actieve swaps met deadlines, quotes en verbindingen.
+
 ```
-atomic-cli quotes --pair xmr-btc
-atomic-cli sell --xmr 1.5 --for btc --receive-address bc1q...
-atomic-cli sell --xmr 2.0 --for eth --receive-address 0x...
-atomic-cli list | status <swap-id> | resume <swap-id> | refund <swap-id>
-```
-
-**TUI (`ratatui`):**
-```
-┌ Atomic ─ XMR ⇄ BTC/ETH ─────────────────────────── [Tor ✓] [stagenet] ┐
-│ Wallets          │ Offers                                              │
-│ XMR  12.4000     │  #  Peer         Paar      Koers     Min–Max        │
-│ BTC   0.0310     │  1  12D3K…a9f    XMR→BTC   0.00412   0.1–5 XMR      │
-│ ETH   0.0000     │▶ 2  12D3K…77c    XMR→ETH   0.1290    0.5–20 XMR     │
-├──────────────────┴─────────────────────────────────────────────────────┤
-│ Swap 7f3a…  XMR→ETH   2.0 XMR → 0.258 ETH                              │
-│ [✓] sleutels + DLEQ  [✓] ETH gelockt (finalized)  [✓] XMR gelockt 10/10│
-│ [~] wacht op setReady …            claim-deadline t1 over 3u 12m       │
-├────────────────────────────────────────────────────────────────────────┤
-│ n nieuwe swap   r hervatten   l logs   s seed-backup   ? help   q stop │
+┌ asb ─ XMR → BTC/ETH ────────────────────────────── [Tor ✓] [stagenet] ┐
+│ Saldo          │ Actieve swaps                                         │
+│ XMR  12.4000   │  id      paar     bedrag     status         deadline  │
+│ BTC   0.0310   │  7f3a…   ETH→XMR  2.0 XMR    wacht op ready  t1 3u12m │
+│ ETH   0.0450   │  91c2…   BTC→XMR  0.5 XMR    XMR gelockt     T1 4u01m │
+├────────────────┴───────────────────────────────────────────────────────┤
+│ Quote: 1 XMR = 0.00412 BTC | 0.1290 ETH     min 0.1  max 5 XMR         │
+│ q stoppen   r verversen   w opnemen   l logs   ? help                  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
-- [ ] Schermen: wallets, offers, nieuwe swap (met bevestigingsscherm), actieve swaps met timelock-aftelling, geschiedenis en logs.
-- [ ] Duidelijke waarschuwing: **"Sluit atomicd niet af tot de swap klaar is."**
-- [ ] (Optioneel) Basis-GUI in `egui`: dezelfde schermen, die dezelfde JSON-RPC aanroept.
 
-**Klaar wanneer:** je een volledige swap alleen via de TUI kunt doen, en de TUI na een herstart de juiste status toont en de swap automatisch hervat.
-
-### Fase 7: Testnet en hardening (4+ weken)
-- [ ] Bitcoin testnet4/signet, Monero stagenet en Ethereum Sepolia.
-- [ ] Soak-test: 100+ swaps, waarvan een deel met chaos (netwerk weg, node down, proces gekilld).
-- [ ] Wallet- en DB-bestanden versleuteld. Logs zonder geheimen.
-- [ ] Reproduceerbare builds en gesigneerde releases.
-- [ ] Doorloop de checklist in [04-beveiliging.md](04-beveiliging.md).
+### Fase 8: Testnet en hardening (4+ weken)
+- [ ] Sepolia + Monero stagenet (+ BTC testnet voor regressie).
+- [ ] Soak-test: 100+ ETH-swaps, waarvan een deel met chaos (netwerk weg, RPC down, proces gekilld).
+- [ ] De checklist in [04-beveiliging.md](04-beveiliging.md) doorlopen.
+- [ ] Upstream mergen en alles opnieuw testen (zie [FORK.md](FORK.md)).
 
 **Klaar wanneer:** 100 testnet-swaps zonder fondsverlies zijn gedaan, en elk faalpad minstens 10× echt is doorlopen.
 
-### Fase 8: Externe audit (4–8 weken doorlooptijd)
-- [ ] Schrijf een threat model (zie [04-beveiliging.md](04-beveiliging.md)).
-- [ ] Laat het Solidity-contract en de protocol- en crypto-code auditen. Het ETH-deel is nieuw en **niet geaudit** bij AthanorLabs.
-- [ ] Bug bounty starten.
-
-**Klaar wanneer:** alle kritieke en hoge bevindingen zijn opgelost en hertest.
-
-### Fase 9: Mainnet-beta
-- [ ] Harde limieten per swap (begin klein, bijv. een paar honderd euro).
-- [ ] Een kill-switch die **nieuwe** swaps stopt. Refunds en redeems blijven altijd werken.
-- [ ] Monitoring en een incidentplan.
-- [ ] **Monero-hardfork (FCMP++/Carrot):** nieuw transactieformaat en adresschema. Er is nog geen mainnet-datum (de roadmap mikt op 2027). Test de key-split-aanpak opnieuw op de testnetten zodra die fork daar draait, en volg eigenwallet en de Monero-devs.
-- [ ] **Juridisch:** zelf p2p handelen met eigen software is iets anders dan een dienst voor anderen draaien. Wil je als maker publiek handelen, check dan MiCA/DNB-regels in NL.
+### Fase 9: Audit en mainnet-beta
+- [ ] Externe audit van het contract **en** van de ETH-protocolcode. Daarna een bug bounty.
+- [ ] Mainnet met harde limieten per swap (begin klein).
+- [ ] Een kill-switch voor **nieuwe** ETH-swaps. Lopende swaps altijd laten afronden.
+- [ ] **Monero-hardfork (FCMP++/Carrot):** er is nog geen mainnet-datum (de roadmap mikt op 2027). Volg upstream, want eigenwallet zal dit voor BTC al moeten oplossen.
+- [ ] **Juridisch:** een publieke maker draaien voor anderen kan onder MiCA/DNB-regels vallen. Laat dat checken.
 
 ---
 
-## Samengevat: de volgorde
-1. Leren + eigenwallet op stagenet (fase 0)
-2. Regtest-omgeving (fase 1)
-3. Crypto-kern + BTC-leg met alle faalpaden (fase 2–3)
-4. ETH-contract + ETH-leg (fase 4)
-5. P2P + markt (fase 5)
-6. CLI → TUI → optioneel GUI (fase 6)
-7. Testnet, audit, mainnet-beta met limieten (fase 7–9)
+## Samengevat
+1. Fork bouwen, testen en begrijpen (fase 0)
+2. ETH-spec en contract (fase 1–2)
+3. ETH-wallet, core en state machines met docker-tests (fase 3–4)
+4. Maker en taker UI (fase 5–6), optioneel een TUI-dashboard (fase 7)
+5. Testnet, audit, mainnet-beta (fase 8–9)

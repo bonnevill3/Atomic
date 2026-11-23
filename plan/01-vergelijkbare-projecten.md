@@ -28,7 +28,7 @@ Onderzocht in november 2026. Statussen veranderen snel, dus check de repo zelf v
   - `monero-wallet`, `monero-sys`, `monero-rpc-pool`
   - `libp2p-tor`, `libp2p-rendezvous-node`
   - `swap-asb` (maker), `swap-controller` (RPC om de daemon te besturen), `src-gui`/`src-tauri` (GUI)
-- **Belangrijk voor jou:** wat jij wilt (XMR verkopen voor BTC) is precies wat de **`asb` (maker)** van eigenwallet al doet. Voor alleen XMR→BTC kun je vandaag al een asb draaien. Nieuw bouwen moet je (a) de ETH-kant en (b) een app waarmee een XMR-verkoper als *taker* kan handelen.
+- **Belangrijk voor jou:** wat jij wilt (XMR verkopen voor BTC) is precies wat de **`asb` (maker)** van eigenwallet al doet. Deze repo is daarom een fork van eigenwallet (zie [FORK.md](FORK.md)), en het enige grote nieuwe onderdeel is ETH.
 - **Licentie:** GPL-3.0. Kopieer je code, dan moet je project ook GPL-3.0 zijn.
 
 ### AthanorLabs: de enige ETH↔XMR-referentie
@@ -39,7 +39,7 @@ Onderzocht in november 2026. Statussen veranderen snel, dus check de repo zelf v
   4. De XMR-houder roept `Claim(s)` aan en onthult daarmee zijn geheime sleuteldeel.
   5. Met dat deel kan de ETH-houder de XMR opnemen.
 - **Timeouts:** `t_0` is de deadline voor Ready/Refund. Tussen `t_0` en `t_1` mag de XMR-houder altijd claimen. Na `t_1` mag de ETH-houder weer refunden.
-- **Gas-probleem:** wie alleen XMR heeft, heeft geen ETH om `Claim()` te betalen. AthanorLabs loste dit op met *relayers* die een klein deel van de swap krijgen.
+- **Gas-probleem:** wie alleen XMR heeft, heeft geen ETH om `Claim()` te betalen. AthanorLabs loste dit op met *relayers* die een klein deel van de swap krijgen. In onze richting is dat niet nodig: de ETH-kant is de taker, en die heeft zelf ETH.
 - **Let op:** het project is gearchiveerd, niet geaudit en niet gefinancierd. Gebruik het als **ontwerpreferentie**, niet als dependency. Het contract moet je zelf herschrijven, testen en laten auditen.
 
 ### BasicSwap: hoe de omgekeerde richting werkt

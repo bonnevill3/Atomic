@@ -1,3 +1,11 @@
+> **Fork van [eigenwallet/core](https://github.com/eigenwallet/core)** (GPL-3.0), gebaseerd op upstream-commit `bac42be` (22 nov 2026).
+>
+> **Doel van deze fork:** dezelfde éénrichtings-swap als eigenwallet (de taker koopt XMR en de maker/`asb` verkoopt XMR), uitgebreid met **ETH → XMR** naast BTC → XMR.
+>
+> - Plan, onderzoek en beveiligingschecklist staan in [`plan/`](plan/README.md).
+> - Wijzigingen ten opzichte van upstream staan in [`plan/FORK.md`](plan/FORK.md).
+> - De originele README van eigenwallet staat hieronder ongewijzigd.
+
 # eigenwallet
 
 This is the monorepo containing the source code for all of our core projects:
