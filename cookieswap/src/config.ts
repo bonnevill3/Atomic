@@ -77,6 +77,8 @@ const schema = z.object({
   STABLE_PAYOUT_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
   /** Our fee when the user sends (sells) XMR instead of SERVICE_FEE_BPS. Rates don't stack: the highest applies. */
   XMR_SELL_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
+  /** Our fee when the user receives (buys) XMR instead of SERVICE_FEE_BPS. */
+  XMR_BUY_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
   /**
    * Optional extra spread on inventory (XMR) legs on top of the oracle mid price. Default 0, so the
    * advertised fee is the whole markup; it is shown separately in quotes when set.

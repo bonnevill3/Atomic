@@ -237,6 +237,7 @@ function renderInfo(info) {
   const feeRows = [
     ["Every swap", pct(info.fees.swapBps)],
     [`Receiving ${stableNames}`, pct(info.fees.stablePayoutBps)],
+    ["Buying XMR (you receive Monero)", pct(info.fees.xmrBuyBps)],
     ["Selling XMR (you send Monero)", pct(info.fees.xmrSellBps)],
   ];
   if (info.fees.inventorySpreadBps > 0) feeRows.push(["Swaps paid from our XMR inventory (spread)", `+${pct(info.fees.inventorySpreadBps)}`]);

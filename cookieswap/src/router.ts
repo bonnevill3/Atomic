@@ -94,13 +94,14 @@ export class Router {
   }
 
   /**
-   * SERVICE_FEE_BPS, raised to STABLE_PAYOUT_FEE_BPS when receiving a stablecoin and to XMR_SELL_FEE_BPS
-   * when selling XMR. The rates don't stack: the highest one that applies is charged.
+   * SERVICE_FEE_BPS, raised to STABLE_PAYOUT_FEE_BPS when receiving a stablecoin, XMR_SELL_FEE_BPS when
+   * selling XMR and XMR_BUY_FEE_BPS when buying XMR. The rates don't stack: the highest one that applies is charged.
    */
   feeBps(from: Asset, to: Asset): number {
     const rates = [this.cfg.SERVICE_FEE_BPS];
     if (to.stable) rates.push(this.cfg.STABLE_PAYOUT_FEE_BPS);
     if (from.id === "XMR") rates.push(this.cfg.XMR_SELL_FEE_BPS);
+    if (to.id === "XMR") rates.push(this.cfg.XMR_BUY_FEE_BPS);
     return Math.max(...rates);
   }
 

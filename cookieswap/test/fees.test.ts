@@ -17,15 +17,17 @@ function defaultsRouter() {
 }
 
 describe("fee policy", () => {
-  it("defaults: 1% on every swap, 2% when receiving a stablecoin or selling XMR, no hidden inventory spread", () => {
+  it("defaults: 1% on every swap, 2% when receiving a stablecoin, buying or selling XMR, no hidden inventory spread", () => {
     const { cfg, router } = defaultsRouter();
     expect(cfg.SERVICE_FEE_BPS).toBe(100);
     expect(cfg.STABLE_PAYOUT_FEE_BPS).toBe(200);
     expect(cfg.XMR_SELL_FEE_BPS).toBe(200);
+    expect(cfg.XMR_BUY_FEE_BPS).toBe(200);
     expect(cfg.INVENTORY_SPREAD_BPS).toBe(0);
     expect(cfg.MANUAL_REVIEW_USD).toBe(1000);
     expect(router.feeBps(ASSETS.BTC, ASSETS.ETH)).toBe(100);
-    expect(router.feeBps(ASSETS.BTC, ASSETS.XMR)).toBe(100); // buying XMR stays 1%
+    expect(router.feeBps(ASSETS.BTC, ASSETS.XMR)).toBe(200); // buying XMR
+    expect(router.feeBps(ASSETS["USDT-TRON"], ASSETS.XMR)).toBe(200);
     expect(router.feeBps(ASSETS.XMR, ASSETS.BTC)).toBe(200); // selling XMR
     expect(router.feeBps(ASSETS.XMR, ASSETS["USDT-TRON"])).toBe(200); // rates don't stack
     for (const id of ["USDT-TRON", "USDT-ETH", "USDC-SOL", "USDC-BASE", "DAI-ETH"] as const) {
@@ -43,14 +45,14 @@ describe("fee policy", () => {
     expect(toSol.serviceFee).toBe(2n * 10n ** 10n);
   });
 
-  it("BTC -> XMR from inventory takes exactly 1% (+ XMR network fee)", async () => {
+  it("BTC -> XMR from inventory takes exactly 2% (+ XMR network fee)", async () => {
     const { router } = defaultsRouter();
     const plan = await router.best({ from: ASSETS.BTC, to: ASSETS.XMR, amountIn: 1_000_000n, recipient: fakeMoneroAddress(), dry: true });
-    expect(plan.feeBps).toBe(100);
-    expect(plan.serviceFee).toBe(10_000n); // 1% of 0.01 BTC
+    expect(plan.feeBps).toBe(200);
+    expect(plan.serviceFee).toBe(20_000n); // 2% of 0.01 BTC
     expect(plan.spreadBps).toBe(0);
-    // 0.0099 BTC * $60,000 = $594 -> 1.188 XMR at $500, minus the mock 0.0001 XMR network fee
-    expect(plan.amountOut).toBe(1_188_000_000_000n - 100_000_000n);
+    // 0.0098 BTC * $60,000 = $588 -> 1.176 XMR at $500, minus the mock 0.0001 XMR network fee
+    expect(plan.amountOut).toBe(1_176_000_000_000n - 100_000_000n);
   });
 
   it("buying a stablecoin takes 2%, also for stable -> stable", async () => {

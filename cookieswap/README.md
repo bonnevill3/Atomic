@@ -32,6 +32,7 @@ The router asks every route for a quote and picks the one with the **highest out
 |---|---|---|
 | Every swap | **1%** of the deposit | `SERVICE_FEE_BPS=100` |
 | Swaps where the user **receives a stablecoin** (USDT/USDC/DAI, incl. stable → stable) | **2%** | `STABLE_PAYOUT_FEE_BPS=200` |
+| Swaps where the user **buys XMR** (receives Monero) | **2%** | `XMR_BUY_FEE_BPS=200` |
 | Swaps where the user **sells XMR** (sends Monero) | **2%** | `XMR_SELL_FEE_BPS=200` |
 | Extra spread on XMR inventory legs | **0%**, so the fee above is the whole markup | `INVENTORY_SPREAD_BPS` |
 | Network fee | the gas to forward the deposit, at cost | shown separately in every quote |

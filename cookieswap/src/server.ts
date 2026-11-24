@@ -161,7 +161,7 @@ export async function buildServer(
     ).values()];
     return {
       fees: {
-        swapBps: cfg.SERVICE_FEE_BPS, stablePayoutBps: cfg.STABLE_PAYOUT_FEE_BPS, xmrSellBps: cfg.XMR_SELL_FEE_BPS,
+        swapBps: cfg.SERVICE_FEE_BPS, stablePayoutBps: cfg.STABLE_PAYOUT_FEE_BPS, xmrSellBps: cfg.XMR_SELL_FEE_BPS, xmrBuyBps: cfg.XMR_BUY_FEE_BPS,
         inventorySpreadBps: cfg.INVENTORY_SPREAD_BPS,
       },
       limits: { minUsd: cfg.MIN_ORDER_USD, maxUsd: cfg.MAX_ORDER_USD },
