@@ -4,7 +4,24 @@ import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult } from "./t
 /** Conservative fee estimate for one normal-priority transfer (piconero). */
 const FEE_ESTIMATE = 100_000_000n; // 0.0001 XMR
 
-interface Transfer { amount: number | string; confirmations?: number; txid: string }
+interface Transfer {
+  amount: number | string;
+  confirmations?: number;
+  txid: string;
+  /** Non-zero: the sender time-locked the output (until a block height or timestamp). */
+  unlock_time?: number;
+  /** Not spendable yet (10-block lock or unlock_time). */
+  locked?: boolean;
+}
+
+/**
+ * A deposit only counts once we could actually spend it. Without this, a sender could time-lock the coins
+ * for years: we would pay out from inventory against coins we can never move.
+ */
+function spendable(t: Transfer, confirmations: number): boolean {
+  if (t.unlock_time === undefined) throw new Error("monero-wallet-rpc did not report unlock_time; upgrade monero-wallet-rpc");
+  return (t.confirmations ?? 0) >= confirmations && (t.unlock_time === 0 || t.locked === false);
+}
 
 /**
  * Monero hot wallet via monero-wallet-rpc (account 0). Each order gets its own subaddress;
@@ -48,7 +65,7 @@ export class XmrWallet implements ChainWallet {
     const all = [...(r.in ?? []), ...(r.pool ?? [])];
     const seen = all.reduce((s, t) => s + BigInt(t.amount), 0n);
     const confirmed = (r.in ?? [])
-      .filter((t) => (t.confirmations ?? 0) >= this.confirmations)
+      .filter((t) => spendable(t, this.confirmations))
       .reduce((s, t) => s + BigInt(t.amount), 0n);
     return { seen, confirmed, txids: [...new Set(all.map((t) => t.txid))] };
   }

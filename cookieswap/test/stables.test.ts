@@ -54,7 +54,7 @@ describe("stablecoin deposits across networks", () => {
     expect(t.mock("DAI-ETH").sent).toHaveLength(0);
   });
 
-  it("refunding USDT on Polygon sends the full token amount back (gas is paid in POL)", async () => {
+  it("refunding USDT on Polygon sends the tokens back minus the POL gas it costs us", async () => {
     const t = buildFlows();
     const { o } = await t.order("USDT-POL", "BTC", usd6(2000), PLACEHOLDER_ADDRESS.BTC, PLACEHOLDER_ADDRESS.POL);
     t.mock("USDT-POL").simulateDeposit(o.deposit_address, usd6(2000));
@@ -63,8 +63,18 @@ describe("stablecoin deposits across networks", () => {
     await t.run(1);
     const refund = t.mock("USDT-POL").sent.at(-1)!;
     expect(t.db.getOrder(o.id)!.status).toBe("refunded");
-    expect(refund).toMatchObject({ to: PLACEHOLDER_ADDRESS.POL, amount: "all" });
-    expect(refund.amount === "all" && t.mock("USDT-POL").sent.length).toBe(1);
+    // 0.02 POL at $0.50 = $0.01 = 10_000 USDT units (+1 rounding up)
+    expect(refund).toMatchObject({ to: PLACEHOLDER_ADDRESS.POL, amount: usd6(2000) - 10_001n });
+    expect(t.mock("USDT-POL").sent).toHaveLength(1);
+  });
+
+  it("does not spend our gas refunding a token deposit worth less than the network fee", async () => {
+    const t = buildFlows();
+    const { o } = await t.order("USDC-ETH", "BTC", usd6(100), PLACEHOLDER_ADDRESS.BTC, PLACEHOLDER_ADDRESS.ETH);
+    t.mock("USDC-ETH").simulateDeposit(o.deposit_address, 900_000n); // $0.90 < 0.0005 ETH gas ($1)
+    await t.run(4);
+    expect(t.db.getOrder(o.id)!).toMatchObject({ status: "needs_review", error: expect.stringMatching(/too small to refund/) });
+    expect(t.mock("USDC-ETH").sent).toHaveLength(0);
   });
 
   it("EVM deposit addresses are never reused across chains (shared index space)", async () => {

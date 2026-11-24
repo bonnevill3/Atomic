@@ -83,6 +83,10 @@ describe("EvmWallet for native BNB on BNB Smart Chain", () => {
     node.set(node.eth, dep, 3n * 10n ** 17n);
     expect(await w.getDeposit(dep)).toMatchObject({ seen: 3n * 10n ** 17n, confirmed: 3n * 10n ** 17n });
     expect((await w.estimateSendFee(false)).asset).toBe("BNB");
+    // never a direct vault transfer with calldata memo (THORChain/Maya need their router on EVM chains)
+    await expect(w.estimateSendFee(true)).rejects.toThrow(/router/);
+    await expect(w.send({ from: { kind: "deposit", index: 9 }, to: "0x1111111111111111111111111111111111111111", amount: 1n, memo: "=:BTC.BTC:bc1q" }))
+      .rejects.toThrow(/router/);
     const dest = "0x1111111111111111111111111111111111111111";
     const r = await w.send({ from: { kind: "deposit", index: 9 }, to: dest, amount: "all" });
     expect(r.amount).toBe(3n * 10n ** 17n - r.fee);

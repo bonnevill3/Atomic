@@ -15,7 +15,7 @@ export interface SendRequest {
   to: string;
   /** Exact amount, or "all" = sweep the source (minus the network fee for native coins). */
   amount: bigint | "all";
-  /** THORChain swap memo (BTC: OP_RETURN, ETH: tx data). */
+  /** THORChain/Maya swap memo (BTC/LTC: OP_RETURN). Other wallets refuse memos. */
   memo?: string;
 }
 

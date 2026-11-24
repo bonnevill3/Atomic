@@ -43,6 +43,8 @@ export interface OrderRow {
   payout_txid: string | null;
   refund_txid: string | null;
   amount_out: string | null;
+  /** dex route: how much of the deposit we forwarded to the DEX (a DEX refund comes back to the deposit address). */
+  forwarded_amount: string | null;
   /** Rate tolerance the user chose; null only on orders created before per-order slippage existed. */
   max_drift_bps: number | null;
   /** When the operator was alerted about the current hold (awaiting_approval / needs_review); null = not yet. */
@@ -91,6 +93,7 @@ export class Db {
         payout_txid TEXT,
         refund_txid TEXT,
         amount_out TEXT,
+        forwarded_amount TEXT,
         max_drift_bps INTEGER,
         alert_sent_at INTEGER,
         error TEXT,
@@ -113,6 +116,7 @@ export class Db {
     const cols = new Set((this.db.prepare("PRAGMA table_info(orders)").all() as { name: string }[]).map((c) => c.name));
     if (!cols.has("max_drift_bps")) this.db.exec("ALTER TABLE orders ADD COLUMN max_drift_bps INTEGER");
     if (!cols.has("alert_sent_at")) this.db.exec("ALTER TABLE orders ADD COLUMN alert_sent_at INTEGER");
+    if (!cols.has("forwarded_amount")) this.db.exec("ALTER TABLE orders ADD COLUMN forwarded_amount TEXT");
   }
 
   /**

@@ -8,6 +8,7 @@ import type { OrderRow } from "../src/db";
 import { Engine } from "../src/engine";
 import { Router } from "../src/router";
 import { DenylistScreening } from "../src/screening";
+import { buildFlows } from "./flows";
 import { FakeDex, fakeMoneroAddress, RecordingNotifier, setup } from "./helpers";
 
 const XMR_ADDR = fakeMoneroAddress(18, 3);
@@ -149,5 +150,43 @@ describe("engine", () => {
     expect(t.db.getOrder(o.id)!.status).toBe("dex_pending");
     const fwd = t.wallets.ETH.sent.find((s) => s.to === "near-deposit-address")!;
     expect(fwd.from).toEqual({ kind: "inventory" });
+  });
+});
+
+describe("refund after a DEX refund", () => {
+  it("waits for the DEX's refund instead of refunding only what stayed behind on the deposit address", async () => {
+    const t = buildFlows();
+    const amount = 10n ** 17n; // 0.1 ETH
+    const { o } = await t.order("ETH", "SOL", amount, PLACEHOLDER_ADDRESS.SOL, PLACEHOLDER_ADDRESS.ETH);
+    t.mock("ETH").simulateDeposit(o.deposit_address, amount);
+    await t.run(2); // confirming -> forwarded to the DEX
+    const fwd = t.db.getOrder(o.id)!;
+    expect(fwd.status).toBe("dex_pending");
+    const forwarded = BigInt(fwd.forwarded_amount!);
+    expect(forwarded).toBeLessThan(amount);
+
+    // Like on EVM chains, our fee stays behind on the deposit address; then the DEX reports a refund.
+    const leftBehind = amount - forwarded;
+    t.mock("ETH").simulateDeposit(o.deposit_address, leftBehind);
+    t.db.transition(o.id, "dex_pending", { status: "refund_pending", error: "dex refunded" });
+    const sentBefore = t.mock("ETH").sent.length;
+    await t.run(2);
+    expect(t.db.getOrder(o.id)!.status).toBe("refund_pending"); // not "refunded" with only the leftover
+    expect(t.mock("ETH").sent).toHaveLength(sentBefore);
+
+    t.mock("ETH").simulateDeposit(o.deposit_address, (forwarded * 98n) / 100n); // the DEX refund lands
+    await t.run(1);
+    expect(t.db.getOrder(o.id)!.status).toBe("refunded");
+    expect(t.mock("ETH").sent.at(-1)).toMatchObject({ to: PLACEHOLDER_ADDRESS.ETH, amount: "all" });
+  });
+
+  it("refunds right away when nothing was forwarded (e.g. no route at execution)", async () => {
+    const t = buildFlows();
+    const { o } = await t.order("ETH", "SOL", 10n ** 17n, PLACEHOLDER_ADDRESS.SOL, PLACEHOLDER_ADDRESS.ETH);
+    t.mock("ETH").simulateDeposit(o.deposit_address, 10n ** 17n);
+    await t.run(1);
+    t.db.transition(o.id, "confirming", { status: "refund_pending", error: "screening" });
+    await t.run(1);
+    expect(t.db.getOrder(o.id)!.status).toBe("refunded");
   });
 });

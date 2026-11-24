@@ -7,7 +7,7 @@ import { log } from "./log";
 import { createNotifier } from "./notify";
 import { PriceOracle } from "./oracle";
 import { NearIntentsProvider } from "./providers/nearIntents";
-import { MAYA, ThorchainProvider } from "./providers/thorchain";
+import { MAYA, THORCHAIN, ThorchainProvider } from "./providers/thorchain";
 import type { DexName, DexProvider } from "./providers/types";
 import { Router } from "./router";
 import { DenylistScreening } from "./screening";
@@ -21,8 +21,8 @@ async function main() {
 
   // DEX routes only exist on mainnet (THORChain / NEAR Intents have no public testnet).
   const dexes: Partial<Record<DexName, DexProvider>> = {};
-  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_THORCHAIN) dexes.thorchain = new ThorchainProvider(cfg.THORCHAIN_API_URL, cfg.SLIPPAGE_BPS);
-  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_MAYA) dexes.maya = new ThorchainProvider(cfg.MAYA_API_URL, cfg.SLIPPAGE_BPS, MAYA);
+  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_THORCHAIN) dexes.thorchain = new ThorchainProvider(cfg.THORCHAIN_API_URL, cfg.SLIPPAGE_BPS, THORCHAIN, cfg.THORCHAIN_VERIFY_API_URL || undefined);
+  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_MAYA) dexes.maya = new ThorchainProvider(cfg.MAYA_API_URL, cfg.SLIPPAGE_BPS, MAYA, cfg.MAYA_VERIFY_API_URL || undefined);
   if (cfg.NETWORK === "mainnet" && cfg.ENABLE_NEAR) dexes.near = new NearIntentsProvider(cfg.NEAR_1CLICK_URL, cfg.SLIPPAGE_BPS, cfg.NEAR_1CLICK_JWT);
 
   const router = new Router(cfg, oracle, Object.values(dexes), wallets);

@@ -17,7 +17,7 @@ async function main() {
   const e = await eth.depositAddress(1);
   const s = await usdcSol.depositAddress(1);
   console.log("BTC deposit", b.address, await btc.getDeposit(b.address), "fee(memo)", await btc.estimateSendFee(true));
-  console.log("ETH deposit", e.address, await eth.getDeposit(e.address), "fee(memo)", await eth.estimateSendFee(true));
+  console.log("ETH deposit", e.address, await eth.getDeposit(e.address), "fee", await eth.estimateSendFee(false));
   console.log("USDC-SOL deposit", s.address, await usdcSol.getDeposit(s.address), "gas", await usdcSol.gasBalance());
   console.log("inventory BTC", await btc.inventoryBalance(), "ETH", await eth.inventoryBalance(), "USDC-SOL", await usdcSol.inventoryBalance());
 }

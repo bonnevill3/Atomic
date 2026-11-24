@@ -4,7 +4,7 @@ import type { Config } from "./config";
 import type { RouteKind } from "./db";
 import { log } from "./log";
 import { applyBps, bpsOf, convertByPrice, usdValue } from "./money";
-import type { PriceOracle } from "./oracle";
+import { OracleError, type Price, type PriceOracle } from "./oracle";
 import { type DexProvider, type DexQuote, QuoteError } from "./providers/types";
 
 export interface RoutePlan {
@@ -81,9 +81,14 @@ export class Router {
     const settled = await Promise.allSettled(attempts);
     const plans = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
     if (plans.length === 0) {
-      const reasons = settled.flatMap((s) => (s.status === "rejected" ? [String(s.reason?.message ?? s.reason)] : []));
-      log.info("no route", { from: from.id, to: to.id, reasons });
-      throw new QuoteError(reasons.find((r) => !r.includes("not supported")) ?? "no route available for this pair");
+      const errors = settled.flatMap((s) => (s.status === "rejected" ? [s.reason as unknown] : []));
+      log.info("no route", { from: from.id, to: to.id, reasons: errors.map((e) => String((e as Error)?.message ?? e)) });
+      // A missing price is temporary: surface it as such, so the engine holds the order instead of refunding.
+      const oracle = errors.find((e) => e instanceof OracleError);
+      if (oracle) throw oracle;
+      // Only our own messages reach users. Other errors can contain RPC URLs (with API keys) or node responses.
+      const message = errors.flatMap((e) => (e instanceof QuoteError ? [e.message] : [])).find((m) => !m.includes("not supported"));
+      throw new QuoteError(message ?? "no route available for this pair right now");
     }
     return plans.sort((a, b) => (b.amountOut > a.amountOut ? 1 : b.amountOut < a.amountOut ? -1 : 0));
   }
@@ -110,8 +115,8 @@ export class Router {
     if (usd > this.cfg.MAX_ORDER_USD) throw new QuoteError(`maximum is about $${this.cfg.MAX_ORDER_USD}`);
   }
 
-  /** Express a network fee in `asset` units (ERC-20 transfers pay gas in ETH). */
-  private async feeIn(fee: Fee, asset: Asset): Promise<bigint> {
+  /** Express a network fee in `asset` units (ERC-20 transfers pay gas in ETH). Rounds up. */
+  async feeIn(fee: Fee, asset: Asset): Promise<bigint> {
     if (fee.asset === asset.id) return fee.amount;
     const feeAsset = getAsset(fee.asset)!;
     const [pf, pa] = await Promise.all([this.oracle.price(feeAsset), this.oracle.price(asset)]);
@@ -152,6 +157,8 @@ export class Router {
     const wallet = this.wallets[to.id];
     if (!wallet) throw new QuoteError(`no ${to.symbol} wallet`);
     const [pf, pt] = await Promise.all([this.oracle.price(from), this.oracle.price(to)]);
+    this.requireSources(from, pf);
+    this.requireSources(to, pt);
     const gross = convertByPrice(input.amountIn - serviceFee, from, pf.usd, to, pt.usd);
     const payoutFee = await this.feeIn(await wallet.estimateSendFee(false), to);
     const out = applyBps(gross, this.cfg.INVENTORY_SPREAD_BPS) - payoutFee;
@@ -171,7 +178,10 @@ export class Router {
     const ethWallet = this.wallets.ETH;
     if (!ethWallet) throw new QuoteError("no ETH inventory wallet");
     const [pf, pb] = await Promise.all([this.oracle.price(from), this.oracle.price(BRIDGE)]);
-    const forwardFee = await this.feeIn(await ethWallet.estimateSendFee(true), BRIDGE);
+    this.requireSources(from, pf);
+    this.requireSources(BRIDGE, pb);
+    // Plain transfer: memo routes (THORChain/Maya) don't accept EVM deposits from us, see ThorchainProvider.supports.
+    const forwardFee = await this.feeIn(await ethWallet.estimateSendFee(false), BRIDGE);
     const bridgeAmount =
       applyBps(convertByPrice(input.amountIn - serviceFee, from, pf.usd, BRIDGE, pb.usd), this.cfg.INVENTORY_SPREAD_BPS) - forwardFee;
     if (bridgeAmount <= 0n) throw new QuoteError("amount too small to cover fees");
@@ -198,6 +208,13 @@ export class Router {
       etaSeconds: CONFIRM_SECONDS[from.chain] + best.etaSeconds,
       dex: best, bridgeAsset: BRIDGE, bridgeAmount,
     };
+  }
+
+  /** Inventory payouts spend our own funds at the oracle price: one source alone is not trusted for that. */
+  private requireSources(asset: Asset, p: Price): void {
+    if (p.sources < this.cfg.MIN_PRICE_SOURCES) {
+      throw new OracleError(`${asset.symbol} price confirmed by ${p.sources} source(s), ${this.cfg.MIN_PRICE_SOURCES} needed`);
+    }
   }
 
   private async requireInventory(asset: Asset, amount: bigint): Promise<void> {

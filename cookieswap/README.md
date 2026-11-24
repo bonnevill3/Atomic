@@ -113,7 +113,7 @@ These are the decentralized XMR venues as of 23 Nov 2026:
 | Hyperliquid XMR1 | Wagyu's wrapped XMR, **collapsed** after the 20 Nov 2026 hack |
 | eigenwallet makers | atomic swaps, BTC → XMR only, 30–60 min |
 
-So XMR is paid from your own inventory, priced from an oracle: the median of Kraken and CoinGecko. Quotes are refused if the two sources disagree. The THORChain provider **switches XMR on automatically** once an `XMR.XMR` pool is `Available`. Until then, rebalance inventory by hand or through the eigenwallet fork in this repo (see [Next steps](#next-steps)).
+So XMR is paid from your own inventory, priced from an oracle: the median of Kraken and CoinGecko. Inventory payouts need **both** sources (`MIN_PRICE_SOURCES=2`), and quotes are refused if they disagree. The THORChain provider **switches XMR on automatically** once an `XMR.XMR` pool is `Available`. Until then, rebalance inventory by hand or through the eigenwallet fork in this repo (see [Next steps](#next-steps)).
 
 ### Routes with a live quote (re-checked 23 Nov 2026, 3 DEXes)
 These are **quotes**, run with mock chains and dry-run; nothing has been sent on mainnet. The winner changes from minute to minute, which is why every order compares all routes again.
@@ -121,15 +121,13 @@ These are **quotes**, run with mock chains and dry-run; nothing has been sent on
 | Pair (≈$120) | Winner | Others quoting |
 |---|---|---|
 | BTC → ETH / USDC / USDT / ZEC | NEAR Intents | Maya, within ~0.1–0.3% |
-| ETH → BTC | **Maya** (+1.2–2.2% vs NEAR) | NEAR |
-| ETH → USDC / USDT (Ethereum) | **Maya** | NEAR, THORChain |
-| ETH → ZEC, ETH → USDC on Arbitrum | Maya or NEAR (they swap places) | THORChain |
-| ETH → SOL, stables → crypto | NEAR Intents | — |
+| LTC → BTC, BTC → BCH | THORChain | NEAR |
+| ETH / BNB / AVAX → anything, stables → crypto | NEAR Intents | — (see note) |
 | anything ⇄ XMR | cookieswap inventory | — |
-| XMR → USDC | inventory → Maya | — |
-| XMR → SOL / ZEC | inventory → NEAR | — |
+| XMR → USDC / SOL / ZEC | inventory → NEAR | — |
 
 Notes:
+- **THORChain and Maya only take BTC and LTC deposits from us.** For EVM chains their docs only describe deposits through their router contract (`depositWithExpiry`); a plain transfer to the vault with the memo as calldata is not a documented method and could lose funds. Until the router call is implemented, ETH/BNB/AVAX deposits and the ETH inventory bridge go through NEAR Intents (this costs some rate: Maya often beat NEAR on ETH → BTC).
 - At the time of the check, THORChain had **BTC and BASE halted**. Maya's BTC was live.
 - No DEX lists native XMR (THORChain has no XMR pool, and neither NEAR nor Maya lists XMR), so XMR legs use inventory.
 - Deposits are possible in **BTC, ETH, XMR, BNB, SOL, TRX, AVAX, LTC, LINK, UNI and the 11 stablecoins**. XRP, DOGE, ADA, XLM, BCH, SUI and ZEC are payout-only.
@@ -141,7 +139,7 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 106 tests: engine, slippage, review gate + operator alerts, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks
+npm test            # 122 tests: engine, slippage, review gate + operator alerts, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
@@ -197,7 +195,7 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
 
 ## Going live (checklist)
 1. **Separate machine.** Run the hot wallet host on its own machine, behind Tor/HTTPS. Expose only the web port, never wallet-rpc.
-2. **Hot wallet keys.**
+2. **Hot wallet keys.** See [Security review](#security-review-24-nov-2026) for server hardening.
    - Generate a fresh mnemonic and keep it in `MNEMONIC_FILE` (`chmod 600`).
    - Keep only working float on it and sweep profits to cold storage regularly.
    - Never reuse the mnemonic of a cold wallet.
@@ -225,16 +223,39 @@ Lessons taken from Wagyu's incidents (see `../plan/05-wagyu-analysis.md`):
   - BTC 2, ETH 12, XMR 10
   - BSC 15, Polygon 64, Base 30, Arbitrum 60, Avalanche 5, Litecoin 6
   - Tron: solidified blocks; Solana: `finalized` commitment
-- **Prices.** The oracle deviation guard blocks quotes when price sources disagree. If every source fails, the price is dropped rather than served stale, and orders wait.
+- **Prices.** The oracle deviation guard blocks quotes when price sources disagree. If every source fails, the price is dropped rather than served stale. Inventory payouts need two agreeing sources; without them a deposited order is held (never refunded or paid at a guess) and goes to review after 15 minutes.
 - **USDC and USDT can be frozen by their issuers** (Circle / Tether blacklist addresses). Your hot wallet holds them while an order runs and as inventory, so keep stable balances low and sweep often.
 - **Gas top-ups wait for a receipt** (up to 3 min). The engine processes orders one by one, so a slow top-up delays other orders. Fine for a prototype; use a worker queue for volume.
 - **Dependencies.** `npm audit --omit=dev` reports **0 vulnerabilities**. Solana moved from `@solana/web3.js` v1, which had 9 findings, to `@solana/kit` 8.6.
   A signed transfer was simulated on mainnet with signature verification on; it only failed on the unfunded throwaway fee payer.
 - **Tron.** Transactions are built and signed locally (the node cannot alter them). Tron confirmations use solidified blocks (`/walletsolidity`).
-- **Defaults are safe.** `DRY_RUN=true` and `CHAINS=mock` are the defaults. Live mainnet refuses to start without `ADMIN_TOKEN`.
+- **Defaults are safe.** `DRY_RUN=true` and `CHAINS=mock` are the defaults. Live mainnet refuses to start without `ADMIN_TOKEN` and an alert channel.
+- **The admin token can't move funds to new addresses.** Admin calls only approve, refund to the customer's own refund address, record manual resolutions, or sweep a deposit into your own inventory.
+
+### Security review (24 Nov 2026)
+A review of all code paths that move funds. Fixed, each with tests:
+
+| Finding | Risk | Fix |
+|---|---|---|
+| ETH/BNB/AVAX were sent straight to THORChain/Maya vaults with the memo as calldata; their docs only describe the router's `depositWithExpiry` | possible loss of forwarded funds | THORChain/Maya only take BTC/LTC deposits; the EVM wallet refuses memo sends |
+| After a DEX refund, the engine could refund just the ~1% left on the deposit address and close the order before the DEX's refund arrived | customer's refund stuck in our wallet | the forwarded amount is stored; refunds wait until the DEX refund is back (review after 24 h) |
+| Monero deposits with a future `unlock_time` counted as confirmed | attacker paid from inventory against coins we can't spend for years | only spendable transfers count; wallet must report `unlock_time` |
+| THORChain vault address came from one third-party API (Liquify) | a compromised API could redirect forwarded BTC | every vault address is confirmed by an independent node (`THORCHAIN_VERIFY_API_URL`, default Nine Realms) before sending; fails closed |
+| Token refunds were paid with our gas, even for dust | attackers could drain gas inventory (~15 TRX per Tron refund) | the gas is deducted from the refunded tokens; deposits worth less than the fee go to review |
+| Internal error text (e.g. RPC URLs with API keys) could appear in quote errors | leaked API keys | only our own messages reach users |
+| Inventory payouts accepted a single price source | a glitch or manipulated price on one source could pay out too much | two agreeing sources required (`MIN_PRICE_SOURCES`) |
+| BCH `bitcoincash:` prefix broke THORChain memos; memos over 80 bytes failed only after the swap had started | refunds / orders stuck in review | prefix stripped; long memos rejected at quote time |
+| Behind a reverse proxy every visitor shared one rate limit | spam could block real users | `TRUST_PROXY` setting |
+
+No code can make a hot wallet unhackable. What protects the funds beyond the code:
+- **The server is the key.** Anyone who gets a shell on it can read the mnemonic. Use a dedicated machine or VPS with SSH keys only (no passwords), automatic security updates, a firewall that only opens 443, and nothing else running on it.
+- **Keep the hot wallet small.** Hold a few days of float, sweep profits to a cold wallet (hardware wallet, a mnemonic that never touches the server), and set `MAX_ORDER_USD` below the float.
+- **`MNEMONIC_FILE` with `chmod 600`**, owned by the service user. Never `MNEMONIC=` in the environment, never in git, never in chat or e-mail.
+- **monero-wallet-rpc** must be a current release (0.18+), bound to `127.0.0.1`, and never reachable from the internet.
+- **Use your own RPC keys** (Alchemy/Infura/QuickNode, TronGrid) and keep `.env` readable only by the service user.
+- **Protect the admin token and the Telegram bot token** like passwords. Run admin calls over SSH on the server itself.
 - **Still to add for production:**
   - an HSM or a separate signer process (keys are currently in the app process)
-  - alerting
   - a real screening provider
   - backups of the DB (it contains in-flight orders)
   - a reorg policy for ETH (use the `finalized` tag)

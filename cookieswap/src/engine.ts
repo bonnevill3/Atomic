@@ -5,7 +5,7 @@ import type { Db, OrderRow, OrderStatus } from "./db";
 import { log } from "./log";
 import { fromAtomic, usdValue } from "./money";
 import type { Notifier } from "./notify";
-import type { PriceOracle } from "./oracle";
+import { OracleError, type PriceOracle } from "./oracle";
 import type { DexName, DexProvider, DexRef } from "./providers/types";
 import type { RoutePlan, Router } from "./router";
 import type { Screening } from "./screening";
@@ -13,6 +13,8 @@ import type { Screening } from "./screening";
 const LATE_DEPOSIT_GRACE_MS = 2 * 3_600_000;
 const DEX_TIMEOUT_MS = 6 * 3_600_000;
 const REFUND_WAIT_TIMEOUT_MS = 24 * 3_600_000;
+/** How long an order may wait for a reliable price before the operator is asked to look at it. */
+const PRICE_HOLD_MS = 15 * 60_000;
 
 function isSimulated(txid: string): boolean {
   return txid.startsWith("mock-") || txid.startsWith("dryrun-");
@@ -67,6 +69,8 @@ export class Engine {
   private running = false;
   private timer?: NodeJS.Timeout;
   private lastPurge = 0;
+  /** Orders currently held because no reliable price was available, with the time the hold started. */
+  private priceHolds = new Map<string, number>();
 
   constructor(
     private cfg: Config,
@@ -95,8 +99,10 @@ export class Engine {
       for (const o of this.db.listOpenOrders()) {
         try {
           await this.step(o);
+          this.priceHolds.delete(o.id);
         } catch (e) {
-          log.error("order step failed", { order: o.id, status: o.status, err: String(e) });
+          if (e instanceof OracleError) this.holdForPrice(o, e);
+          else log.error("order step failed", { order: o.id, status: o.status, err: String(e) });
         }
       }
       if (Date.now() - this.lastPurge > 3_600_000) {
@@ -140,6 +146,16 @@ export class Engine {
     await this.notifier.send(alertText(o));
     this.db.transition(o.id, o.status, { alert_sent_at: Date.now() });
     log.info("operator alerted", { order: o.id, status: o.status });
+  }
+
+  /** Never guess a price: retry on the next tick, and hand the order to the operator if it takes too long. */
+  private holdForPrice(o: OrderRow, e: OracleError): void {
+    const since = this.priceHolds.get(o.id) ?? Date.now();
+    this.priceHolds.set(o.id, since);
+    log.warn("order held: no reliable price", { order: o.id, status: o.status, err: e.message });
+    if (Date.now() - since < PRICE_HOLD_MS) return;
+    this.priceHolds.delete(o.id);
+    this.review(o, o.status, `no reliable price for ${PRICE_HOLD_MS / 60_000} min: ${e.message}`);
   }
 
   private review(o: OrderRow, from: OrderStatus, error: string): void {
@@ -218,6 +234,7 @@ export class Engine {
         from, to, amountIn: amount, recipient: o.recipient, refundTo: o.deposit_address, dry: false,
       });
     } catch (e) {
+      if (e instanceof OracleError) throw e; // temporary: hold the order (see holdForPrice)
       this.db.transition(o.id, current, { status: "refund_pending", error: `no route at execution: ${String((e as Error).message)}` });
       return;
     }
@@ -264,7 +281,10 @@ export class Engine {
       : { wallet: this.wallets[plan.bridgeAsset!.id]!, from: { kind: "inventory" as const } };
     const sent = await source.wallet.send({ from: source.from, to: q.depositAddress!, amount: q.amountIn, memo: q.memo });
     const ref: DexRef = { provider: q.provider, txid: sent.txid, depositAddress: q.depositAddress };
-    this.db.transition(o.id, "executing", { status: "dex_pending", exec_txid: sent.txid, exec_ref: JSON.stringify(ref) });
+    this.db.transition(o.id, "executing", {
+      status: "dex_pending", exec_txid: sent.txid, exec_ref: JSON.stringify(ref),
+      forwarded_amount: plan.kind === "dex" ? sent.amount.toString() : null,
+    });
     log.info("forwarded to dex", { order: o.id, dex: q.provider, txid: sent.txid });
     if (!isSimulated(sent.txid)) await this.dexes[q.provider]?.notifyDeposit?.(ref);
   }
@@ -310,18 +330,49 @@ export class Engine {
   private async refund(o: OrderRow): Promise<void> {
     const wallet = this.wallets[o.from_asset]!;
     const d = await wallet.getDeposit(o.deposit_address, o.deposit_index);
-    if (d.confirmed === 0n) {
+    if (!refundArrived(o, d.confirmed)) {
       // e.g. a DEX refund still on its way back to the deposit address
       if (Date.now() - o.updated_at > REFUND_WAIT_TIMEOUT_MS) this.review(o, "refund_pending", "refund funds never arrived");
       return;
     }
+    const amount = await this.refundAmount(o, wallet, d.confirmed);
+    if (amount === null) return;
     if (!this.db.transition(o.id, "refund_pending", { status: "refunding" })) return;
     try {
-      const res = await wallet.send({ from: { kind: "deposit", index: o.deposit_index }, to: o.refund_address, amount: "all" });
+      const res = await wallet.send({ from: { kind: "deposit", index: o.deposit_index }, to: o.refund_address, amount });
       this.db.transition(o.id, "refunding", { status: "refunded", refund_txid: res.txid });
       log.info("order refunded", { order: o.id, txid: res.txid });
     } catch (e) {
       this.review({ ...o, status: "refunding" }, "refunding", `refund error: ${String((e as Error).message)}`);
     }
   }
+
+  /**
+   * Native coins pay the refund's network fee out of the deposit ("all"). Tokens are sent with gas from our
+   * inventory, so that cost is taken from the refunded tokens; a deposit worth less than the fee is not refunded
+   * automatically (otherwise dust deposits could drain our gas). Returns null when the order went to review.
+   */
+  private async refundAmount(o: OrderRow, wallet: ChainWallet, confirmed: bigint): Promise<bigint | "all" | null> {
+    const fee = await wallet.estimateSendFee(false);
+    if (fee.asset === o.from_asset) return "all";
+    const feeInAsset = await this.router.feeIn(fee, getAsset(o.from_asset)!);
+    if (confirmed <= feeInAsset) {
+      this.review(o, "refund_pending", "deposit too small to refund: worth less than the network fee");
+      return null;
+    }
+    return confirmed - feeInAsset;
+  }
+}
+
+/**
+ * Can we refund now? After a DEX refund, the deposit address first holds only what stayed behind when we
+ * forwarded (at most received - forwarded); refunding then would send the user just that remainder and close
+ * the order before the DEX's refund lands. So wait until more than half of the forwarded amount is back.
+ */
+export function refundArrived(o: OrderRow, confirmed: bigint): boolean {
+  if (confirmed === 0n) return false;
+  if (o.forwarded_amount === null) return true;
+  const forwarded = BigInt(o.forwarded_amount);
+  const leftBehind = BigInt(o.received_amount!) - forwarded;
+  return confirmed > leftBehind + forwarded / 2n;
 }

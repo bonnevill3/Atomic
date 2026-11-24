@@ -8,6 +8,12 @@ const bool = z
 const schema = z.object({
   PORT: z.coerce.number().int().default(8080),
   HOST: z.string().default("127.0.0.1"),
+  /**
+   * Behind a reverse proxy (nginx, Caddy, Cloudflare Tunnel) set this to the number of proxies, usually 1,
+   * so rate limits apply per visitor instead of to everyone at once. Never set it without a proxy in front:
+   * clients could then fake their address.
+   */
+  TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
   DB_PATH: z.string().default("./data/cookieswap.db"),
 
   /** mainnet: real chains + DEX routes. testnet: BTC testnet4 / Sepolia / XMR stagenet, inventory routes only. */
@@ -54,6 +60,12 @@ const schema = z.object({
   NEAR_1CLICK_JWT: z.string().optional(),
   /** Maya Protocol: THORChain fork with the same API (native BTC, ETH, ARB, ZEC, USDC/USDT). */
   MAYA_API_URL: z.string().default("https://mayanode.mayachain.info"),
+  /**
+   * Independent nodes used to confirm every vault address before we send to it. THORCHAIN_API_URL is a
+   * third-party gateway, so THORChain is checked by default; set an empty string to disable.
+   */
+  THORCHAIN_VERIFY_API_URL: z.string().default("https://thornode.ninerealms.com"),
+  MAYA_VERIFY_API_URL: z.string().optional(),
   ENABLE_THORCHAIN: bool.default(true),
   ENABLE_MAYA: bool.default(true),
   ENABLE_NEAR: bool.default(true),
@@ -74,6 +86,8 @@ const schema = z.object({
   SLIPPAGE_BPS: z.coerce.number().int().min(1).max(1000).default(100),
   /** If the re-quote at execution is worse than the order quote by more than this, refund instead. */
   MAX_RATE_DRIFT_BPS: z.coerce.number().int().min(0).max(2000).default(200),
+  /** Inventory payouts (priced by our oracle) need at least this many agreeing price sources. */
+  MIN_PRICE_SOURCES: z.coerce.number().int().min(1).max(2).default(2),
   /** Refuse inventory quotes when price sources disagree by more than this. */
   MAX_ORACLE_DEVIATION_BPS: z.coerce.number().int().min(0).max(2000).default(150),
 

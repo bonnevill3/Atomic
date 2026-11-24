@@ -9,6 +9,8 @@ let server: Server;
 let base = "";
 const seen: string[] = [];
 let statusBody: unknown = { stages: { inbound_observed: { started: false, completed: false } } };
+/** What the independent "second node" reports as the BTC vault. */
+let verifiedVault = "bc1qmayavault";
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -30,6 +32,9 @@ beforeAll(async () => {
         { chain: "ETH", halted: false, chain_trading_paused: false },
         { chain: "ZEC", halted: true, chain_trading_paused: true },
       ]);
+    }
+    if (url.pathname === "/verify/mayachain/inbound_addresses") {
+      return json([{ chain: "BTC", address: verifiedVault, halted: false, chain_trading_paused: false }]);
     }
     if (url.pathname === "/mayachain/quote/swap") {
       return json({
@@ -55,10 +60,13 @@ describe("Maya provider (THORChain-family API)", () => {
     expect(maya().usesMemo).toBe(true);
   });
 
-  it("supports native BTC/ETH pairs, but not halted chains, staged pools, token deposits or XMR", async () => {
+  it("takes BTC deposits only (memo in OP_RETURN), not EVM, token, halted, staged or XMR", async () => {
     const p = maya();
     expect(await p.supports(ASSETS.BTC, ASSETS.ETH)).toBe(true);
-    expect(await p.supports(ASSETS.ETH, ASSETS["USDC-ETH"])).toBe(true); // stable payout is fine
+    expect(await p.supports(ASSETS.BTC, ASSETS["USDC-ETH"])).toBe(true); // stable payout is fine
+    // EVM deposits need the router's depositWithExpiry; a direct vault transfer is not a documented method
+    expect(await p.supports(ASSETS.ETH, ASSETS.BTC)).toBe(false);
+    expect(await p.supports(ASSETS.ETH, ASSETS["USDC-ETH"])).toBe(false);
     expect(await p.supports(ASSETS["USDC-ETH"], ASSETS.BTC)).toBe(false); // token deposit needs the router
     expect(await p.supports(ASSETS.BTC, ASSETS.ZEC)).toBe(false); // ZEC chain halted
     expect(await p.supports(ASSETS.BTC, ASSETS["USDC-ARB"])).toBe(false); // pool staged
@@ -82,6 +90,30 @@ describe("Maya provider (THORChain-family API)", () => {
     expect(q.depositAddress).toBe("bc1qmayavault");
     expect(q.memo).toContain(PLACEHOLDER_ADDRESS.ETH);
     expect(q.etaSeconds).toBe(630);
+  });
+
+  it("confirms the vault address with a second node before a real (non-dry) quote is used", async () => {
+    const checked = () => new ThorchainProvider(base, 100, MAYA, `${base}/verify`);
+    const input = { from: ASSETS.BTC, to: ASSETS.ETH, amountIn: 1_000_000n, recipient: PLACEHOLDER_ADDRESS.ETH, refundTo: PLACEHOLDER_ADDRESS.BTC };
+    verifiedVault = "bc1qmayavault";
+    expect((await checked().quote({ ...input, dry: false })).depositAddress).toBe("bc1qmayavault");
+
+    verifiedVault = "bc1qsomeoneelse"; // the quoting API hands out an address the network doesn't know
+    await expect(checked().quote({ ...input, dry: false })).rejects.toThrow(/vault address not confirmed/);
+    await expect(new ThorchainProvider(base, 100, MAYA, "http://127.0.0.1:1").quote({ ...input, dry: false }))
+      .rejects.toThrow(/could not be verified/);
+    // indicative (dry) quotes don't move funds and skip the check
+    expect((await checked().quote({ ...input, dry: true })).amountOut).toBeGreaterThan(0n);
+    verifiedVault = "bc1qmayavault";
+  });
+
+  it("strips the CashAddr prefix (its colon is the memo separator) and refuses memos over 80 bytes", async () => {
+    const base_ = { from: ASSETS.BTC, to: ASSETS.ETH, amountIn: 1_000_000n, refundTo: PLACEHOLDER_ADDRESS.BTC, dry: true };
+    await maya().quote({ ...base_, recipient: "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a" });
+    const last = seen.filter((u) => u.startsWith("/mayachain/quote/swap")).at(-1)!;
+    expect(new URLSearchParams(last.split("?")[1]).get("destination")).toBe("qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a");
+    const ada = "addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x";
+    await expect(maya().quote({ ...base_, recipient: ada })).rejects.toThrow(/memo too long/);
   });
 
   it("rejects amounts below Maya's recommended minimum", async () => {

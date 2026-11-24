@@ -5,7 +5,6 @@ import {
   type HDAccount,
   http,
   type PublicClient,
-  stringToHex,
   type Transport,
 } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
@@ -14,7 +13,12 @@ import type { AssetId, EvmChainId, Network } from "../assets";
 import type { ChainWallet, DepositInfo, Fee, SendRequest, SendResult, SendSource } from "./types";
 
 const GAS_PLAIN = 21_000n;
-const GAS_MEMO = 60_000n;
+
+/**
+ * THORChain and Maya only document EVM deposits through their router contract (depositWithExpiry).
+ * A plain transfer to the vault with the memo as calldata is not a supported method, so we never do it.
+ */
+const NO_MEMO = "memo deposits on EVM chains need the THORChain/Maya router (depositWithExpiry), which is not implemented";
 
 /** Pure derivation: m/44'/60'/0'/0/i for deposits, m/44'/60'/1'/0/0 for inventory. */
 export class EvmKeys {
@@ -108,21 +112,20 @@ export class EvmWallet implements ChainWallet {
   }
 
   async estimateSendFee(memo: boolean): Promise<Fee> {
-    return { asset: this.asset, amount: (memo ? GAS_MEMO : GAS_PLAIN) * (await this.rpc.fees()).maxFeePerGas };
+    if (memo) throw new Error(NO_MEMO);
+    return { asset: this.asset, amount: GAS_PLAIN * (await this.rpc.fees()).maxFeePerGas };
   }
 
   async send(req: SendRequest): Promise<SendResult> {
+    if (req.memo) throw new Error(NO_MEMO);
     const account = this.keys.account(req.from);
-    const data = req.memo ? stringToHex(req.memo) : undefined;
     const fees = await this.rpc.fees();
-    const gas = data
-      ? await this.rpc.client.estimateGas({ account, to: req.to as `0x${string}`, value: 1n, data }).then((g) => (g * 12n) / 10n)
-      : GAS_PLAIN;
+    const gas = GAS_PLAIN;
     const maxFee = gas * fees.maxFeePerGas;
     const balance = await this.rpc.client.getBalance({ address: account.address });
     const value = req.amount === "all" ? balance - maxFee : req.amount;
     if (value <= 0n || value + maxFee > balance) throw new Error(`insufficient ${this.asset} for amount + gas`);
-    const txid = await this.rpc.walletFor(account).sendTransaction({ to: req.to as `0x${string}`, value, data, gas, ...fees });
+    const txid = await this.rpc.walletFor(account).sendTransaction({ to: req.to as `0x${string}`, value, gas, ...fees });
     return { txid, amount: value, fee: maxFee };
   }
 }

@@ -121,7 +121,9 @@ export async function buildServer(
   cfg: Config, db: Db, router: Router, wallets: Wallets, oracle: PriceOracle, dexNames: string[],
 ): Promise<FastifyInstance> {
   // Logger off on purpose: no request logs, no IP addresses stored anywhere.
-  const app = Fastify({ logger: false, trustProxy: false, bodyLimit: 16 * 1024 });
+  // TRUST_PROXY = n trusts the n nearest hops (our own proxies) for the client address; 0 trusts none.
+  const trustProxy = cfg.TRUST_PROXY > 0 ? (_address: string, hop: number) => hop < cfg.TRUST_PROXY : false;
+  const app = Fastify({ logger: false, trustProxy, bodyLimit: 16 * 1024 });
 
   await app.register(fastifyRateLimit, { global: true, max: 120, timeWindow: "1 minute" });
   app.addHook("onSend", async (_req, reply) => {

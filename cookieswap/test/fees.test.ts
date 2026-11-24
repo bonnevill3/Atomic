@@ -10,7 +10,8 @@ import { FakeDex, fakeMoneroAddress, staticSource, TEST_PRICES } from "./helpers
 function defaultsRouter() {
   const cfg = loadConfig({ CHAINS: "mock", DB_PATH: ":memory:" } as NodeJS.ProcessEnv);
   const wallets = createWallets(cfg); // mock wallets for every asset, including all stablecoins
-  const oracle = new PriceOracle(Object.values(ASSETS), cfg.MAX_ORACLE_DEVIATION_BPS, [staticSource({ ...TEST_PRICES })], 0);
+  // two agreeing sources: production requires that for inventory payouts
+  const oracle = new PriceOracle(Object.values(ASSETS), cfg.MAX_ORACLE_DEVIATION_BPS, [staticSource({ ...TEST_PRICES }), staticSource({ ...TEST_PRICES })], 0);
   const dex = new FakeDex(1);
   return { cfg, router: new Router(cfg, oracle, [dex], wallets), wallets };
 }
