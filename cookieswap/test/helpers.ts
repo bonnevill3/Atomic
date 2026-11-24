@@ -4,6 +4,7 @@ import { MockWallet } from "../src/chains/mock";
 import type { Wallets } from "../src/chains/types";
 import { type Config, loadConfig } from "../src/config";
 import { Db } from "../src/db";
+import type { Notifier } from "../src/notify";
 import { PriceOracle, type PriceSource } from "../src/oracle";
 import type { DexProvider, DexQuote, DexQuoteInput, DexRef, DexStatus } from "../src/providers/types";
 
@@ -33,13 +34,24 @@ export function fakeMoneroAddress(prefix = 18, fill = 7): string {
   return moneroBase58Encode(Uint8Array.from([...body, ...sum]));
 }
 
+/** Captures operator alerts; set `failing` to simulate a channel outage. */
+export class RecordingNotifier implements Notifier {
+  sent: string[] = [];
+  failing = false;
+
+  async send(text: string): Promise<void> {
+    if (this.failing) throw new Error("alert channel down");
+    this.sent.push(text);
+  }
+}
+
 export function staticSource(prices: Partial<Record<AssetId, number>>): PriceSource & { prices: typeof prices } {
   return { prices, usd: async () => ({ ...prices }) };
 }
 
 export function testConfig(overrides: Record<string, string> = {}): Config {
   return loadConfig({
-    CHAINS: "mock", DB_PATH: ":memory:", ENGINE_INTERVAL_SECONDS: "1", SERVICE_FEE_BPS: "50",
+    CHAINS: "mock", DB_PATH: ":memory:", ENGINE_INTERVAL_SECONDS: "1", SERVICE_FEE_BPS: "50", XMR_SELL_FEE_BPS: "50",
     INVENTORY_SPREAD_BPS: "100", STABLE_PAYOUT_FEE_BPS: "200", MAX_RATE_DRIFT_BPS: "200", MANUAL_REVIEW_USD: "1000000",
     ...overrides,
   } as NodeJS.ProcessEnv);

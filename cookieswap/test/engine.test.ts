@@ -8,7 +8,7 @@ import type { OrderRow } from "../src/db";
 import { Engine } from "../src/engine";
 import { Router } from "../src/router";
 import { DenylistScreening } from "../src/screening";
-import { FakeDex, fakeMoneroAddress, setup } from "./helpers";
+import { FakeDex, fakeMoneroAddress, RecordingNotifier, setup } from "./helpers";
 
 const XMR_ADDR = fakeMoneroAddress(18, 3);
 
@@ -28,11 +28,12 @@ function build(denylist?: string) {
   const env = setup();
   const dex = new FakeDex(20); // 1 ETH = 20 SOL
   const router = new Router(env.cfg, env.oracle, [dex], env.wallets);
-  const engine = new Engine(env.cfg, env.db, router, env.wallets, { near: dex }, new DenylistScreening(denylist), env.oracle);
+  const notifier = new RecordingNotifier();
+  const engine = new Engine(env.cfg, env.db, router, env.wallets, { near: dex }, new DenylistScreening(denylist), env.oracle, notifier);
   const run = async (n = 3) => {
     for (let i = 0; i < n; i++) await engine.tick();
   };
-  return { ...env, dex, router, engine, run };
+  return { ...env, dex, router, engine, run, notifier };
 }
 
 describe("engine", () => {

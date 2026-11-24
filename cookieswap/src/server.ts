@@ -10,10 +10,10 @@ import { MockWallet } from "./chains/mock";
 import type { Wallets } from "./chains/types";
 import type { Config } from "./config";
 import type { Db, OrderRow, OrderStatus } from "./db";
+import { sweepToInventory } from "./engine";
 import { log } from "./log";
 import { fromAtomic, toAtomic } from "./money";
 import { OracleError } from "./oracle";
-import { usdValue } from "./money";
 import { QuoteError } from "./providers/types";
 import type { PriceOracle } from "./oracle";
 import { CONFIRM_SECONDS, type RoutePlan, type Router } from "./router";
@@ -58,12 +58,11 @@ export function routeName(label: string): string {
   return label.split(" → ").map((p) => ROUTE_NAMES[p] ?? p).join(" → ");
 }
 
-function quoteView(p: RoutePlan, manualReview: boolean, slippageBps: number) {
+function quoteView(p: RoutePlan, slippageBps: number) {
   const rate = Number(fromAtomic(p.amountOut, p.to)) / Number(fromAtomic(p.amountIn, p.from));
   // Worst case: the rate may fall by `slippageBps` before we execute, then the DEX applies its own limit.
   const guaranteedMin = (p.minAmountOut * BigInt(10_000 - slippageBps)) / 10_000n;
   return {
-    manualReview,
     route: p.label,
     routeName: routeName(p.label),
     feeBps: p.feeBps,
@@ -87,7 +86,7 @@ function orderView(o: OrderRow) {
   const to = getAsset(o.to_asset)!;
   const fmt = (v: string | null, a: Asset) => (v === null ? null : fromAtomic(BigInt(v), a));
   const publicStatus: Record<OrderStatus, string> = {
-    awaiting_deposit: "awaiting_deposit", confirming: "confirming", awaiting_approval: "manual_review",
+    awaiting_deposit: "awaiting_deposit", confirming: "confirming", awaiting_approval: "processing",
     approved: "processing", executing: "processing",
     dex_pending: "processing", completed: "completed", refund_pending: "refunding", refunding: "refunding",
     refunded: "refunded", expired: "expired", needs_review: "under_review",
@@ -142,7 +141,7 @@ export async function buildServer(
   });
 
   app.get("/api/health", async () => ({
-    ok: true, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN, manualReviewUsd: cfg.MANUAL_REVIEW_USD,
+    ok: true, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN,
   }));
 
   /** Everything the info section shows, derived from the live config so the page never drifts from reality. */
@@ -159,8 +158,11 @@ export async function buildServer(
         .map((a) => [a.chain, { chain: a.chain, network: a.network.replace(/ \(.*\)$/, ""), confirmations: conf[a.chain], typicalSeconds: CONFIRM_SECONDS[a.chain] }]),
     ).values()];
     return {
-      fees: { swapBps: cfg.SERVICE_FEE_BPS, stablePayoutBps: cfg.STABLE_PAYOUT_FEE_BPS, inventorySpreadBps: cfg.INVENTORY_SPREAD_BPS },
-      limits: { minUsd: cfg.MIN_ORDER_USD, maxUsd: cfg.MAX_ORDER_USD, manualReviewUsd: cfg.MANUAL_REVIEW_USD },
+      fees: {
+        swapBps: cfg.SERVICE_FEE_BPS, stablePayoutBps: cfg.STABLE_PAYOUT_FEE_BPS, xmrSellBps: cfg.XMR_SELL_FEE_BPS,
+        inventorySpreadBps: cfg.INVENTORY_SPREAD_BPS,
+      },
+      limits: { minUsd: cfg.MIN_ORDER_USD, maxUsd: cfg.MAX_ORDER_USD },
       depositWindowMinutes: cfg.ORDER_TTL_MINUTES,
       maxRateDriftBps: cfg.MAX_RATE_DRIFT_BPS,
       slippage: { defaultBps: cfg.MAX_RATE_DRIFT_BPS, minBps: SLIPPAGE_LIMITS_BPS.min, maxBps: SLIPPAGE_LIMITS_BPS.max },
@@ -169,10 +171,6 @@ export async function buildServer(
       networks,
     };
   });
-
-  /** Indicative only: the binding check runs on the confirmed deposit in the engine. */
-  const needsReview = async (amountIn: bigint, from: Asset) =>
-    usdValue(amountIn, from, (await oracle.price(from)).usd) > cfg.MANUAL_REVIEW_USD;
 
   app.get("/api/assets", async () =>
     Object.values(ASSETS).filter((a) => a.listed).map((a) => ({
@@ -203,12 +201,8 @@ export async function buildServer(
     }
     const recipient = b.recipient && isValidAddress(to.chain, b.recipient, cfg.NETWORK) ? b.recipient : undefined;
     const plans = await router.plan({ from, to, amountIn, recipient, dry: true });
-    const review = await needsReview(amountIn, from);
     const slippage = b.slippageBps ?? cfg.MAX_RATE_DRIFT_BPS;
-    return {
-      best: quoteView(plans[0], review, slippage),
-      alternatives: plans.slice(1).map((p) => quoteView(p, review, slippage)),
-    };
+    return { best: quoteView(plans[0], slippage), alternatives: plans.slice(1).map((p) => quoteView(p, slippage)) };
   });
 
   app.post("/api/orders", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
@@ -248,7 +242,7 @@ export async function buildServer(
       max_drift_bps: slippage,
       expires_at: Date.now() + cfg.ORDER_TTL_MINUTES * 60_000,
     });
-    return { token, order: orderView(order), quote: quoteView(plan, await needsReview(amountIn, from), slippage) };
+    return { token, order: orderView(order), quote: quoteView(plan, slippage) };
   });
 
   const authorizedOrder = (req: FastifyRequest<{ Params: { id: string } }>): OrderRow => {
@@ -339,17 +333,41 @@ export async function buildServer(
         return orderView(db.getOrder(o.id)!);
       });
 
-      /** Record a manual resolution (e.g. paid or refunded by hand). */
-      admin.post<{ Params: { id: string }; Body: { status: "completed" | "refunded"; txid: string } }>(
-        "/admin/orders/:id/resolve",
-        async (req) => {
-          const b = z.object({ status: z.enum(["completed", "refunded"]), txid: z.string().min(1) }).parse(req.body);
-          const o = db.getOrder(req.params.id);
-          if (!o || o.status !== "needs_review") throw new ApiError(409, "only needs_review orders can be resolved");
-          db.transition(o.id, "needs_review", b.status === "completed" ? { status: "completed", payout_txid: b.txid } : { status: "refunded", refund_txid: b.txid });
-          return orderView(db.getOrder(o.id)!);
-        },
-      );
+      /**
+       * Record a manual resolution.
+       * - needs_review: paid or refunded by hand after checking on-chain state.
+       * - awaiting_approval: a large order the operator filled by hand ("completed" only). Its deposit is
+       *   then swept to the inventory address, like after an inventory payout.
+       */
+      admin.post<{ Params: { id: string } }>("/admin/orders/:id/resolve", async (req) => {
+        const b = z.object({
+          status: z.enum(["completed", "refunded"]), txid: z.string().min(1), amountOut: z.string().max(40).optional(),
+        }).parse(req.body);
+        const o = db.getOrder(req.params.id);
+        if (!o) throw new ApiError(404, "order not found");
+        const manualFill = o.status === "awaiting_approval" && b.status === "completed";
+        if (o.status !== "needs_review" && !manualFill) {
+          throw new ApiError(409, "only needs_review orders, or awaiting_approval orders filled by hand (status completed), can be resolved");
+        }
+        let amountOut: string | undefined;
+        try {
+          amountOut = b.amountOut === undefined ? undefined : toAtomic(b.amountOut, getAsset(o.to_asset)!).toString();
+        } catch (e) {
+          throw new ApiError(400, (e as Error).message);
+        }
+        const patch = b.status === "completed"
+          ? { status: "completed" as const, payout_txid: b.txid, ...(amountOut ? { amount_out: amountOut } : {}) }
+          : { status: "refunded" as const, refund_txid: b.txid };
+        if (!db.transition(o.id, o.status, patch)) throw new ApiError(409, "order changed meanwhile, try again");
+        log.info("order resolved by operator", { order: o.id, status: b.status, manualFill });
+        if (!manualFill) return orderView(db.getOrder(o.id)!);
+        // The order is done either way; report the sweep so the operator can follow up if it failed.
+        try {
+          return { order: orderView(db.getOrder(o.id)!), sweepTxid: await sweepToInventory(wallets[o.from_asset]!, o) };
+        } catch (e) {
+          return { order: orderView(db.getOrder(o.id)!), sweepError: String((e as Error).message) };
+        }
+      });
 
       if (cfg.CHAINS === "mock") {
         /** Development only: simulate the user's deposit for an order. */

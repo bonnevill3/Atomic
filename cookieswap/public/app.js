@@ -237,6 +237,7 @@ function renderInfo(info) {
   const feeRows = [
     ["Every swap", pct(info.fees.swapBps)],
     [`Receiving ${stableNames}`, pct(info.fees.stablePayoutBps)],
+    ["Selling XMR (you send Monero)", pct(info.fees.xmrSellBps)],
   ];
   if (info.fees.inventorySpreadBps > 0) feeRows.push(["Swaps paid from our XMR inventory (spread)", `+${pct(info.fees.inventorySpreadBps)}`]);
   feeRows.push(["Network fee", "Gas to forward your deposit, shown in your quote"]);
@@ -251,16 +252,15 @@ function renderInfo(info) {
     ], true)),
     faqItem("What does it cost?",
       tableFrom(["", "Fee"], feeRows),
-      el("p", {}, "Our fee is taken from your deposit and shown in every quote. There are no other fees.")),
+      el("p", {}, "Our fee is taken from your deposit and shown in every quote. When two rates apply, such as selling XMR for a stablecoin, you pay the higher one, never both. There are no other fees.")),
     faqItem("How long does it take?",
       tableFrom(["Network you send on", "We wait for", "Typical wait"],
         info.networks.map((n) => [n.network, n.confirmations, minutes(n.typicalSeconds)])),
-      el("p", {}, `After that the swap itself usually takes a few minutes, depending on the route. Swaps above ${usd(info.limits.manualReviewUsd)} take longer, because we check them by hand first.`)),
+      el("p", {}, "After that the swap itself usually takes a few minutes, depending on the route.")),
     faqItem("What is slippage tolerance?",
       el("p", {}, `Rates aren't locked while you send your deposit. When it confirms we fetch a fresh rate; if that is worse than your quote by more than your slippage tolerance, you get a refund instead. The default is ${pct(info.slippage.defaultBps)}; you can pick ${pct(info.slippage.minBps)}–${pct(info.slippage.maxBps)} under the settings icon. A tight tolerance protects the rate but makes a refund more likely.`)),
     faqItem("Are there limits?", listFrom([
       `Minimum about ${usd(info.limits.minUsd)}, maximum about ${usd(info.limits.maxUsd)} per swap.`,
-      `Swaps above ${usd(info.limits.manualReviewUsd)} are checked by hand after your deposit confirms, before they run.`,
       "Some routes have their own minimum. If your amount is too small, the quote tells you.",
     ])),
     faqItem("What if something goes wrong?", listFrom([
@@ -490,7 +490,6 @@ async function getQuote({ silent = false } = {}) {
     $("out").textContent = "0";
     $("to-panel").classList.remove("loading");
     $("details").hidden = true;
-    $("q-review").hidden = true;
     stopRefreshRing();
     updateUsd();
     updateButton();
@@ -519,7 +518,6 @@ async function getQuote({ silent = false } = {}) {
     state.quoteError = e.message;
     $("out").textContent = "0";
     $("details").hidden = true;
-    $("q-review").hidden = true;
     $("quote-error").textContent = e.message;
     $("quote-error").hidden = false;
     stopRefreshRing();
@@ -561,8 +559,6 @@ function renderQuote(silent) {
   $("q-eta").textContent = eta(b.etaSeconds);
   $("q-note").textContent = `Rates aren't locked. We check the rate again when your deposit confirms; if it is more than ${pct(b.slippageBps)} worse, you get a refund instead.`;
   $("details").hidden = false;
-  $("q-review").textContent = `Swaps above ${usd(state.health.manualReviewUsd)} are checked by hand after your deposit confirms, before the swap runs. This can add some time.`;
-  $("q-review").hidden = !b.manualReview;
 }
 
 function updateButton() {
@@ -849,11 +845,10 @@ async function switchTo(chainId) {
 }
 
 // ---------------------------------------------------------------- order view
-const STEP_INDEX = { awaiting_deposit: 0, confirming: 1, manual_review: 2, processing: 2, completed: 3 };
+const STEP_INDEX = { awaiting_deposit: 0, confirming: 1, processing: 2, completed: 3 };
 const STATUS_TEXT = {
   awaiting_deposit: ["Waiting for your deposit.", "", "Awaiting deposit"],
   confirming: ["Deposit received, waiting for confirmations.", "", "Confirming"],
-  manual_review: ["Deposit confirmed. Large swaps are checked by hand before they run; we will execute or refund it.", "warn", "Manual review"],
   processing: ["Swapping your funds through the best route.", "", "Swapping"],
   completed: ["Done! Your funds are on their way to your address.", "ok", "Completed"],
   refunding: ["Refunding to your refund address.", "warn", "Refunding"],

@@ -6,7 +6,7 @@ import type { AssetId, ChainId } from "./assets";
 export type OrderStatus =
   | "awaiting_deposit" // waiting for the user's deposit
   | "confirming" // deposit seen, waiting for confirmations
-  | "awaiting_approval" // above MANUAL_REVIEW_USD: deposit confirmed, operator must approve or refund
+  | "awaiting_approval" // above MANUAL_REVIEW_USD: deposit confirmed, operator must approve, fill or refund
   | "approved" // operator approved; engine executes on the next tick
   | "executing" // write-ahead marker: a send is in progress (never auto-retried)
   | "dex_pending" // forwarded to the DEX, waiting for its payout
@@ -45,6 +45,8 @@ export interface OrderRow {
   amount_out: string | null;
   /** Rate tolerance the user chose; null only on orders created before per-order slippage existed. */
   max_drift_bps: number | null;
+  /** When the operator was alerted about the current hold (awaiting_approval / needs_review); null = not yet. */
+  alert_sent_at: number | null;
   error: string | null;
   created_at: number;
   updated_at: number;
@@ -90,6 +92,7 @@ export class Db {
         refund_txid TEXT,
         amount_out TEXT,
         max_drift_bps INTEGER,
+        alert_sent_at INTEGER,
         error TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
@@ -109,6 +112,7 @@ export class Db {
   private migrate(): void {
     const cols = new Set((this.db.prepare("PRAGMA table_info(orders)").all() as { name: string }[]).map((c) => c.name));
     if (!cols.has("max_drift_bps")) this.db.exec("ALTER TABLE orders ADD COLUMN max_drift_bps INTEGER");
+    if (!cols.has("alert_sent_at")) this.db.exec("ALTER TABLE orders ADD COLUMN alert_sent_at INTEGER");
   }
 
   /**

@@ -16,15 +16,30 @@ function defaultsRouter() {
 }
 
 describe("fee policy", () => {
-  it("defaults: 1% on every swap, 2% when receiving a stablecoin, no hidden inventory spread", () => {
+  it("defaults: 1% on every swap, 2% when receiving a stablecoin or selling XMR, no hidden inventory spread", () => {
     const { cfg, router } = defaultsRouter();
     expect(cfg.SERVICE_FEE_BPS).toBe(100);
     expect(cfg.STABLE_PAYOUT_FEE_BPS).toBe(200);
+    expect(cfg.XMR_SELL_FEE_BPS).toBe(200);
     expect(cfg.INVENTORY_SPREAD_BPS).toBe(0);
-    expect(router.feeBps(ASSETS.ETH)).toBe(100);
-    expect(router.feeBps(ASSETS.XMR)).toBe(100);
-    expect(router.feeBps(ASSETS.BTC)).toBe(100);
-    for (const id of ["USDT-TRON", "USDT-ETH", "USDC-SOL", "USDC-BASE", "DAI-ETH"] as const) expect(router.feeBps(ASSETS[id])).toBe(200);
+    expect(cfg.MANUAL_REVIEW_USD).toBe(1000);
+    expect(router.feeBps(ASSETS.BTC, ASSETS.ETH)).toBe(100);
+    expect(router.feeBps(ASSETS.BTC, ASSETS.XMR)).toBe(100); // buying XMR stays 1%
+    expect(router.feeBps(ASSETS.XMR, ASSETS.BTC)).toBe(200); // selling XMR
+    expect(router.feeBps(ASSETS.XMR, ASSETS["USDT-TRON"])).toBe(200); // rates don't stack
+    for (const id of ["USDT-TRON", "USDT-ETH", "USDC-SOL", "USDC-BASE", "DAI-ETH"] as const) {
+      expect(router.feeBps(ASSETS.ETH, ASSETS[id])).toBe(200);
+    }
+  });
+
+  it("selling XMR takes 2% on both XMR routes (inventory payout and inventory -> DEX)", async () => {
+    const { router } = defaultsRouter();
+    const toBtc = await router.best({ from: ASSETS.XMR, to: ASSETS.BTC, amountIn: 10n ** 12n, recipient: PLACEHOLDER_ADDRESS.BTC, dry: true });
+    expect(toBtc.feeBps).toBe(200);
+    expect(toBtc.serviceFee).toBe(2n * 10n ** 10n); // 2% of 1 XMR
+    const toSol = await router.best({ from: ASSETS.XMR, to: ASSETS.SOL, amountIn: 10n ** 12n, recipient: PLACEHOLDER_ADDRESS.SOL, dry: true });
+    expect(toSol.kind).toBe("inventory_dex");
+    expect(toSol.serviceFee).toBe(2n * 10n ** 10n);
   });
 
   it("BTC -> XMR from inventory takes exactly 1% (+ XMR network fee)", async () => {

@@ -32,10 +32,12 @@ The router asks every route for a quote and picks the one with the **highest out
 |---|---|---|
 | Every swap | **1%** of the deposit | `SERVICE_FEE_BPS=100` |
 | Swaps where the user **receives a stablecoin** (USDT/USDC/DAI, incl. stable → stable) | **2%** | `STABLE_PAYOUT_FEE_BPS=200` |
+| Swaps where the user **sells XMR** (sends Monero) | **2%** | `XMR_SELL_FEE_BPS=200` |
 | Extra spread on XMR inventory legs | **0%**, so the fee above is the whole markup | `INVENTORY_SPREAD_BPS` |
 | Network fee | the gas to forward the deposit, at cost | shown separately in every quote |
 
 - The fee is taken from the deposit before routing.
+- The rates don't stack: XMR → USDT costs 2%, not 4%.
 - DEX costs (pool fees, solver spread) are part of the DEX quote, so they're already in the rate.
 - If you set an inventory spread, the quote shows it next to the fee ("Our fee (1% + 0.5% spread)"). It is never hidden.
 
@@ -51,7 +53,7 @@ cookieswap has its own look (warm dark theme with a light-mode variant); the UX 
 - Responsive down to 320 px, hover/press micro-animations, honours `prefers-reduced-motion`.
 - **FAQ section**, filled from `GET /api/info` so it always matches the running config:
   - how it works, what it costs (fee table), how long it takes (per network, from the confirmation settings)
-  - limits and the manual review, what happens when something goes wrong
+  - limits, what happens when something goes wrong
   - custody, stated plainly: we hold the deposit during the swap
   - what data is stored, supported networks, and which exchanges are compared
 
@@ -88,13 +90,16 @@ I picked the networks by circulating supply (DefiLlama, 23 Nov 2026), keeping on
 - **Tron transactions are built locally:** the API node only supplies chain data and relays. A compromised node therefore can't change the recipient or amount behind our back. The encoding is checked byte for byte against transactions built by TronGrid (see `test/fixtures/tron-golden.json`).
 - **Minimum for Tron USDT:** NEAR Intents currently requires **$100**. With fee and Tron gas, a USDT-TRON order to a DEX route needs about **$106**. Smaller orders get a clear error. Stable → XMR (inventory) has no such minimum.
 
-### Safety net: manual review above $500
+### Large orders: held for you above $1,000 (invisible to the customer)
 When a deposit is confirmed and has passed screening, cookieswap values it in USD (oracle price at that moment).
-If it is worth **more than `MANUAL_REVIEW_USD` (default $500)**:
-- The order goes to `awaiting_approval`, and **nothing is sent** until an operator acts.
-- The UI warns about this on the quote, and the user sees "manual review" as the status.
-- `POST /admin/orders/:id/approve` releases the order. It is still re-quoted and rate-checked, so a late approval after a big price move becomes a refund.
-- `POST /admin/orders/:id/refund` refunds it instead.
+If it is worth **more than `MANUAL_REVIEW_USD` (default $1,000)**:
+- The order goes to `awaiting_approval`, and **nothing is sent** until you act.
+- **You get an alert** (Telegram and/or webhook) with the amount, pair, addresses and the three admin calls below. Undelivered alerts are retried every engine tick until they go through.
+- **The customer is not told.** Quotes, the FAQ and the public API don't mention the threshold, and the order simply shows "processing".
+- Choose one:
+  - `POST /admin/orders/:id/approve`: let the engine swap it. It is still re-quoted and rate-checked, so a late approval after a big price move becomes a refund.
+  - `POST /admin/orders/:id/resolve` `{"status":"completed","txid":"…","amountOut":"…"}`: you **filled it by hand** (e.g. paid the customer from your own wallet). The order is marked completed with your txid and amount, and its deposit is swept to the inventory address.
+  - `POST /admin/orders/:id/refund`: refund it.
 - If the deposit changes after approval (e.g. the user sends more), the approval is void and the order goes back to review.
 - If the price oracle is unavailable, the order is held. It is never waved through.
 
@@ -136,7 +141,7 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 93 tests: engine, slippage, review gate, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks
+npm test            # 106 tests: engine, slippage, review gate + operator alerts, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
@@ -187,7 +192,7 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
 | `POST /admin/orders/:id/approve` | release an order above the review threshold |
 | `POST /admin/orders/:id/refund` | refund (awaiting / confirming / awaiting_approval / needs_review / expired) |
 | `POST /admin/orders/:id/retry` | re-execute a `needs_review` order. **Only** after verifying nothing was broadcast. |
-| `POST /admin/orders/:id/resolve` `{status, txid}` | record a manual payout or refund |
+| `POST /admin/orders/:id/resolve` `{status, txid, amountOut?}` | record a manual payout or refund (`needs_review`), or a large order you filled by hand (`awaiting_approval`, `completed` only; sweeps the deposit to inventory) |
 | `POST /admin/mock/deposit` `{orderId}` | mock mode only |
 
 ## Going live (checklist)
@@ -210,7 +215,7 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
    - stables collected from stable → XMR orders pile up on the ETH inventory address. Sell or rebalance them regularly.
 5. **Dry run on live chains.** Use `CHAINS=live DRY_RUN=true` and check the logs for what *would* be broadcast.
 6. **Small live amounts.** Set `DRY_RUN=false` with `MAX_ORDER_USD` small. Do every route at least once, plus a refund.
-7. **Monitor.** Watch the `awaiting_approval` and `needs_review` queues, inventory levels and DEX halts (THORChain halts chains regularly). Large orders sit still until someone approves them.
+7. **Monitor.** Set up the alert channel (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, or `ALERT_WEBHOOK_URL`); the server refuses to start on live chains without one. You get an alert for every order above `MANUAL_REVIEW_USD` and every order that lands in `needs_review`. Alerts contain addresses and amounts, so they pass through Telegram's or the webhook provider's servers. Also watch inventory levels and DEX halts (THORChain halts chains regularly). Large orders sit still until you act.
 
 ## Security
 Lessons taken from Wagyu's incidents (see `../plan/05-wagyu-analysis.md`):

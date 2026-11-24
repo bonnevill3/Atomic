@@ -1,9 +1,10 @@
 import { getAsset } from "./assets";
-import type { Wallets } from "./chains/types";
+import type { ChainWallet, Wallets } from "./chains/types";
 import type { Config } from "./config";
 import type { Db, OrderRow, OrderStatus } from "./db";
 import { log } from "./log";
-import { usdValue } from "./money";
+import { fromAtomic, usdValue } from "./money";
+import type { Notifier } from "./notify";
 import type { PriceOracle } from "./oracle";
 import type { DexName, DexProvider, DexRef } from "./providers/types";
 import type { RoutePlan, Router } from "./router";
@@ -15,6 +16,46 @@ const REFUND_WAIT_TIMEOUT_MS = 24 * 3_600_000;
 
 function isSimulated(txid: string): boolean {
   return txid.startsWith("mock-") || txid.startsWith("dryrun-");
+}
+
+/** Move an order's whole deposit to the inventory address (after we paid the user from inventory or by hand). */
+export async function sweepToInventory(wallet: ChainWallet, o: OrderRow): Promise<string | null> {
+  const d = await wallet.getDeposit(o.deposit_address, o.deposit_index);
+  if (d.confirmed === 0n) return null;
+  const res = await wallet.send({ from: { kind: "deposit", index: o.deposit_index }, to: await wallet.inventoryAddress(), amount: "all" });
+  return res.txid;
+}
+
+/** The private operator alert for an order that waits for a human. */
+export function alertText(o: OrderRow): string {
+  const from = getAsset(o.from_asset)!;
+  const to = getAsset(o.to_asset)!;
+  const amount = fromAtomic(BigInt(o.received_amount ?? o.amount_in), from);
+  const api = `/admin/orders/${o.id}`;
+  const lines = o.status === "awaiting_approval"
+    ? [
+        "cookieswap: large order waiting for you",
+        `${amount} ${from.symbol} (${from.network}) -> ${to.symbol} (${to.network}), quoted ~${fromAtomic(BigInt(o.quoted_out), to)} ${to.symbol}`,
+        `Why: ${o.error}`,
+        "The customer sees 'processing'. Choose one:",
+        `- let the engine swap it: POST ${api}/approve`,
+        `- fill it by hand, then record it: POST ${api}/resolve {"status":"completed","txid":"<payout txid>","amountOut":"<amount>"}`,
+        `- refund it: POST ${api}/refund`,
+      ]
+    : [
+        "cookieswap: order needs review",
+        `${amount} ${from.symbol} (${from.network}) -> ${to.symbol} (${to.network})`,
+        `Why: ${o.error}`,
+        `Check on-chain first, then POST ${api}/retry, ${api}/resolve or ${api}/refund`,
+      ];
+  return [
+    ...lines,
+    "",
+    `Order: ${o.id}`,
+    `Deposit address: ${o.deposit_address}`,
+    `Pay out to: ${o.recipient}`,
+    `Refund address: ${o.refund_address}`,
+  ].join("\n");
 }
 
 /**
@@ -35,6 +76,7 @@ export class Engine {
     private dexes: Partial<Record<DexName, DexProvider>>,
     private screening: Screening,
     private oracle: PriceOracle,
+    private notifier: Notifier,
   ) {}
 
   start(): void {
@@ -83,14 +125,25 @@ export class Engine {
         return this.checkDex(o);
       case "refund_pending":
         return this.refund(o);
+      case "awaiting_approval":
+      case "needs_review":
+        // Waits for the operator (admin API); make sure they know.
+        return this.alertOperator(o);
       default:
-        // awaiting_approval and needs_review wait for the operator (admin API).
         return;
     }
   }
 
+  /** Alert once per hold. A failed alert throws and is retried on the next tick. */
+  private async alertOperator(o: OrderRow): Promise<void> {
+    if (o.alert_sent_at !== null) return;
+    await this.notifier.send(alertText(o));
+    this.db.transition(o.id, o.status, { alert_sent_at: Date.now() });
+    log.info("operator alerted", { order: o.id, status: o.status });
+  }
+
   private review(o: OrderRow, from: OrderStatus, error: string): void {
-    if (this.db.transition(o.id, from, { status: "needs_review", error })) {
+    if (this.db.transition(o.id, from, { status: "needs_review", error, alert_sent_at: null })) {
       log.warn("order needs review", { order: o.id, error });
     }
   }
@@ -136,7 +189,7 @@ export class Engine {
     if (usd > this.cfg.MANUAL_REVIEW_USD) {
       if (this.db.transition(o.id, "confirming", {
         status: "awaiting_approval", received_amount: d.confirmed.toString(), deposit_txids: JSON.stringify(d.txids),
-        error: `manual review: ~$${Math.round(usd)} > $${this.cfg.MANUAL_REVIEW_USD}`,
+        error: `manual review: ~$${Math.round(usd)} > $${this.cfg.MANUAL_REVIEW_USD}`, alert_sent_at: null,
       })) log.warn("order awaiting manual approval", { order: o.id, usd: Math.round(usd) });
       return;
     }
@@ -218,12 +271,8 @@ export class Engine {
 
   /** After completion, move whatever is left on the deposit address (deposit or fee residue) into inventory. */
   private async consolidate(o: OrderRow): Promise<void> {
-    const wallet = this.wallets[o.from_asset]!;
     try {
-      const d = await wallet.getDeposit(o.deposit_address, o.deposit_index);
-      if (d.confirmed === 0n) return;
-      const to = await wallet.inventoryAddress();
-      await wallet.send({ from: { kind: "deposit", index: o.deposit_index }, to, amount: "all" });
+      await sweepToInventory(this.wallets[o.from_asset]!, o);
     } catch (e) {
       log.warn("consolidation failed (funds stay on the deposit address)", { order: o.id, err: String(e) });
     }

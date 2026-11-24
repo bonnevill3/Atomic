@@ -15,7 +15,7 @@ export interface RoutePlan {
   to: Asset;
   /** Gross amount the user deposits. */
   amountIn: bigint;
-  /** Our fee rate: SERVICE_FEE_BPS, or STABLE_PAYOUT_FEE_BPS when `to` is a stablecoin. */
+  /** Our fee rate: see `Router.feeBps`. */
   feeBps: number;
   serviceFee: bigint;
   /** Extra inventory spread applied on top of the oracle price (inventory legs only). */
@@ -67,7 +67,7 @@ export class Router {
     if (!from.depositable || !this.wallets[from.id]) throw new QuoteError(`${from.symbol} deposits are not supported`);
     await this.checkLimits(input);
 
-    const feeBps = this.feeBps(to);
+    const feeBps = this.feeBps(from, to);
     const serviceFee = bpsOf(input.amountIn, feeBps);
     const attempts: Promise<RoutePlan>[] = [];
     const xmrInvolved = from.id === "XMR" || to.id === "XMR";
@@ -88,9 +88,15 @@ export class Router {
     return plans.sort((a, b) => (b.amountOut > a.amountOut ? 1 : b.amountOut < a.amountOut ? -1 : 0));
   }
 
-  /** Receiving a stablecoin costs STABLE_PAYOUT_FEE_BPS; every other swap SERVICE_FEE_BPS. */
-  feeBps(to: Asset): number {
-    return to.stable ? this.cfg.STABLE_PAYOUT_FEE_BPS : this.cfg.SERVICE_FEE_BPS;
+  /**
+   * SERVICE_FEE_BPS, raised to STABLE_PAYOUT_FEE_BPS when receiving a stablecoin and to XMR_SELL_FEE_BPS
+   * when selling XMR. The rates don't stack: the highest one that applies is charged.
+   */
+  feeBps(from: Asset, to: Asset): number {
+    const rates = [this.cfg.SERVICE_FEE_BPS];
+    if (to.stable) rates.push(this.cfg.STABLE_PAYOUT_FEE_BPS);
+    if (from.id === "XMR") rates.push(this.cfg.XMR_SELL_FEE_BPS);
+    return Math.max(...rates);
   }
 
   async best(input: PlanInput): Promise<RoutePlan> {
@@ -133,7 +139,7 @@ export class Router {
     });
     return {
       kind: "dex", label: dex.name, from: input.from, to: input.to,
-      amountIn: input.amountIn, feeBps: this.feeBps(input.to), serviceFee, spreadBps: 0, forwardFee,
+      amountIn: input.amountIn, feeBps: this.feeBps(input.from, input.to), serviceFee, spreadBps: 0, forwardFee,
       amountOut: q.amountOut, minAmountOut: q.minAmountOut,
       etaSeconds: CONFIRM_SECONDS[input.from.chain] + q.etaSeconds,
       dex: q,
@@ -153,7 +159,7 @@ export class Router {
     await this.requireInventory(to, out);
     return {
       kind: "inventory", label: "inventory", from, to,
-      amountIn: input.amountIn, feeBps: this.feeBps(to), serviceFee, spreadBps: this.cfg.INVENTORY_SPREAD_BPS, forwardFee: 0n,
+      amountIn: input.amountIn, feeBps: this.feeBps(input.from, to), serviceFee, spreadBps: this.cfg.INVENTORY_SPREAD_BPS, forwardFee: 0n,
       amountOut: out, minAmountOut: out,
       etaSeconds: CONFIRM_SECONDS[from.chain] + 120,
     };
@@ -187,7 +193,7 @@ export class Router {
     if (!best) throw new QuoteError(`no DEX route from ${BRIDGE.symbol} to ${to.symbol}`);
     return {
       kind: "inventory_dex", label: `inventory → ${best.provider}`, from, to,
-      amountIn: input.amountIn, feeBps: this.feeBps(to), serviceFee, spreadBps: this.cfg.INVENTORY_SPREAD_BPS, forwardFee: 0n,
+      amountIn: input.amountIn, feeBps: this.feeBps(input.from, to), serviceFee, spreadBps: this.cfg.INVENTORY_SPREAD_BPS, forwardFee: 0n,
       amountOut: best.amountOut, minAmountOut: best.minAmountOut,
       etaSeconds: CONFIRM_SECONDS[from.chain] + best.etaSeconds,
       dex: best, bridgeAsset: BRIDGE, bridgeAmount,

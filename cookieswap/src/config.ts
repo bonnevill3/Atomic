@@ -63,6 +63,8 @@ const schema = z.object({
   SERVICE_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(100),
   /** Our fee when the user receives a stablecoin (USDT/USDC/DAI) instead of SERVICE_FEE_BPS. */
   STABLE_PAYOUT_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
+  /** Our fee when the user sends (sells) XMR instead of SERVICE_FEE_BPS. Rates don't stack: the highest applies. */
+  XMR_SELL_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
   /**
    * Optional extra spread on inventory (XMR) legs on top of the oracle mid price. Default 0, so the
    * advertised fee is the whole markup; it is shown separately in quotes when set.
@@ -77,8 +79,11 @@ const schema = z.object({
 
   ORDER_TTL_MINUTES: z.coerce.number().int().min(5).default(60),
   MIN_ORDER_USD: z.coerce.number().default(20),
-  /** Safety net: orders worth more than this (USD, at deposit confirmation) wait for operator approval. */
-  MANUAL_REVIEW_USD: z.coerce.number().min(0).default(500),
+  /**
+   * Orders worth more than this (USD, at deposit confirmation) wait for the operator, who gets an alert.
+   * Internal only: customers just see "processing".
+   */
+  MANUAL_REVIEW_USD: z.coerce.number().min(0).default(1000),
   MAX_ORDER_USD: z.coerce.number().default(5000),
   /** Completed/refunded/expired orders are deleted after this many days (privacy). */
   RETENTION_DAYS: z.coerce.number().int().min(0).default(7),
@@ -86,6 +91,13 @@ const schema = z.object({
 
   /** Bearer token for /admin endpoints. Admin API is disabled when unset. */
   ADMIN_TOKEN: z.string().min(24).optional(),
+
+  /** Private operator alerts (large orders, orders that need review). Telegram and/or a webhook. */
+  TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+  TELEGRAM_CHAT_ID: z.string().min(1).optional(),
+  TELEGRAM_API_URL: z.string().default("https://api.telegram.org"),
+  /** POSTs JSON {"text", "content"}: works with Slack and Discord incoming webhooks. */
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
 });
 
 export type Config = z.infer<typeof schema> & { mnemonic?: string };
@@ -107,6 +119,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (cfg.CHAINS === "live" && !cfg.mnemonic) {
     throw new Error("CHAINS=live requires MNEMONIC_FILE (or MNEMONIC)");
+  }
+  if (!!cfg.TELEGRAM_BOT_TOKEN !== !!cfg.TELEGRAM_CHAT_ID) {
+    throw new Error("Telegram alerts need both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID");
+  }
+  if (cfg.CHAINS === "live" && !cfg.TELEGRAM_BOT_TOKEN && !cfg.ALERT_WEBHOOK_URL) {
+    throw new Error(
+      "CHAINS=live requires an alert channel (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, or ALERT_WEBHOOK_URL): " +
+        `orders above $${cfg.MANUAL_REVIEW_USD} wait for you and you must be told about them`,
+    );
   }
   if (cfg.CHAINS === "live" && !cfg.DRY_RUN && cfg.NETWORK === "mainnet" && !cfg.ADMIN_TOKEN) {
     throw new Error("Refusing to run live on mainnet without ADMIN_TOKEN (needed for refunds/review)");

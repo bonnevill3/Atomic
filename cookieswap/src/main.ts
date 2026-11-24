@@ -4,6 +4,7 @@ import { loadConfig } from "./config";
 import { Db } from "./db";
 import { Engine } from "./engine";
 import { log } from "./log";
+import { createNotifier } from "./notify";
 import { PriceOracle } from "./oracle";
 import { NearIntentsProvider } from "./providers/nearIntents";
 import { MAYA, ThorchainProvider } from "./providers/thorchain";
@@ -25,7 +26,7 @@ async function main() {
   if (cfg.NETWORK === "mainnet" && cfg.ENABLE_NEAR) dexes.near = new NearIntentsProvider(cfg.NEAR_1CLICK_URL, cfg.SLIPPAGE_BPS, cfg.NEAR_1CLICK_JWT);
 
   const router = new Router(cfg, oracle, Object.values(dexes), wallets);
-  const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE), oracle);
+  const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE), oracle, createNotifier(cfg));
   const app = await buildServer(cfg, db, router, wallets, oracle, Object.keys(dexes));
 
   await app.listen({ port: cfg.PORT, host: cfg.HOST });
@@ -33,6 +34,7 @@ async function main() {
   log.info("cookieswap started", {
     url: `http://${cfg.HOST}:${cfg.PORT}`, network: cfg.NETWORK, chains: cfg.CHAINS, dryRun: cfg.DRY_RUN,
     dexes: Object.keys(dexes), admin: !!cfg.ADMIN_TOKEN, manualReviewUsd: cfg.MANUAL_REVIEW_USD,
+    alerts: [cfg.TELEGRAM_BOT_TOKEN && "telegram", cfg.ALERT_WEBHOOK_URL && "webhook"].filter(Boolean),
   });
   if (cfg.CHAINS === "live" && !cfg.DRY_RUN) log.warn("LIVE MODE: real funds will be moved");
 
