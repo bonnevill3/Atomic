@@ -32,7 +32,7 @@ export class EvmKeys {
 }
 
 const VIEM_CHAIN: Record<EvmChainId, Chain> = { ETH: mainnet, BSC: bsc, POL: polygon, BASE: base, ARB: arbitrum, AVAX: avalanche };
-const DEFAULT_RPC: Record<EvmChainId, string> = {
+export const DEFAULT_RPC: Record<EvmChainId, string> = {
   ETH: "https://ethereum-rpc.publicnode.com",
   BSC: "https://bsc-rpc.publicnode.com",
   POL: "https://polygon-bor-rpc.publicnode.com",

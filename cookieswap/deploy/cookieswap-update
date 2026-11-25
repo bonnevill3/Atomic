@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Update cookieswap to the latest code of its branch. Runs the tests first; restarts only if they pass.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
+
+APP=/opt/cookieswap/app
+as_app() { runuser -u cookieswap -- env HOME=/var/lib/cookieswap "$@"; }
+
+before="$(as_app git -C "$APP" rev-parse --short HEAD)"
+as_app git -C "$APP" pull --ff-only
+after="$(as_app git -C "$APP" rev-parse --short HEAD)"
+if [[ "$before" == "$after" && "${1:-}" != "--force" ]]; then
+  echo "already up to date ($after)"
+  exit 0
+fi
+
+cd "$APP/cookieswap"
+as_app npm ci --no-audit --no-fund
+as_app npx tsc --noEmit
+as_app npm test
+install -m 755 deploy/cookieswap-admin deploy/cookieswap-backup deploy/cookieswap-update /usr/local/bin/
+systemctl restart cookieswap
+sleep 3
+if systemctl is-active --quiet cookieswap; then
+  echo "updated $before -> $after and restarted"
+else
+  echo "cookieswap did not start, see: journalctl -u cookieswap -n 50" >&2
+  exit 1
+fi

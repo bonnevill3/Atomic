@@ -1,5 +1,6 @@
 import { getAsset } from "./assets";
-import type { ChainWallet, Wallets } from "./chains/types";
+import type { ChainWallet, DepositInfo, Wallets } from "./chains/types";
+import type { DepositVerifiers } from "./chains/verify";
 import type { Config } from "./config";
 import type { Db, OrderRow, OrderStatus } from "./db";
 import { log } from "./log";
@@ -15,6 +16,8 @@ const DEX_TIMEOUT_MS = 6 * 3_600_000;
 const REFUND_WAIT_TIMEOUT_MS = 24 * 3_600_000;
 /** How long an order may wait for a reliable price before the operator is asked to look at it. */
 const PRICE_HOLD_MS = 15 * 60_000;
+/** How long a deposit may stay unconfirmed by the second source (it may lag a block or two) before review. */
+const VERIFY_HOLD_MS = 30 * 60_000;
 
 function isSimulated(txid: string): boolean {
   return txid.startsWith("mock-") || txid.startsWith("dryrun-");
@@ -71,6 +74,8 @@ export class Engine {
   private lastPurge = 0;
   /** Orders currently held because no reliable price was available, with the time the hold started. */
   private priceHolds = new Map<string, number>();
+  /** Orders whose deposit the second source hasn't confirmed yet, with the time the hold started. */
+  private verifyHolds = new Map<string, number>();
 
   constructor(
     private cfg: Config,
@@ -81,6 +86,8 @@ export class Engine {
     private screening: Screening,
     private oracle: PriceOracle,
     private notifier: Notifier,
+    /** Independent second view of deposits (live mainnet); null with mock chains. */
+    private verifiers: DepositVerifiers | null,
   ) {}
 
   start(): void {
@@ -148,6 +155,34 @@ export class Engine {
     log.info("operator alerted", { order: o.id, status: o.status });
   }
 
+  /**
+   * Before we act on a deposit (pay from inventory, forward, or even refund), an independent provider must see
+   * at least the same confirmed amount. Otherwise one compromised API could fake a deposit and get paid.
+   */
+  private async confirmedBySecondSource(o: OrderRow, amount: bigint): Promise<boolean> {
+    if (this.verifiers === null || o.deposit_chain === "XMR") return true; // mock chains / our own monerod
+    const source = this.verifiers[o.from_asset];
+    if (!source) throw new Error(`no deposit double-check configured for ${o.from_asset}`);
+    let second: DepositInfo | undefined;
+    try {
+      second = await source.getDeposit(o.deposit_address, o.deposit_index);
+    } catch (e) {
+      log.warn("deposit double-check failed", { order: o.id, err: String((e as Error).message) });
+    }
+    if (second && second.confirmed >= amount) {
+      this.verifyHolds.delete(o.id);
+      return true;
+    }
+    const since = this.verifyHolds.get(o.id) ?? Date.now();
+    this.verifyHolds.set(o.id, since);
+    log.warn("deposit not confirmed by the second source yet", { order: o.id, primary: amount, second: second?.confirmed });
+    if (Date.now() - since >= VERIFY_HOLD_MS) {
+      this.verifyHolds.delete(o.id);
+      this.review(o, "confirming", `deposit not confirmed by the second source for ${VERIFY_HOLD_MS / 60_000} min (primary ${amount}, second ${second?.confirmed ?? "unreachable"})`);
+    }
+    return false;
+  }
+
   /** Never guess a price: retry on the next tick, and hand the order to the operator if it takes too long. */
   private holdForPrice(o: OrderRow, e: OracleError): void {
     const since = this.priceHolds.get(o.id) ?? Date.now();
@@ -190,6 +225,8 @@ export class Engine {
       }
       return;
     }
+
+    if (!(await this.confirmedBySecondSource(o, d.confirmed))) return;
 
     const screen = await this.screening.check({
       chain: o.deposit_chain, depositTxids: d.txids, recipient: o.recipient, refundAddress: o.refund_address,

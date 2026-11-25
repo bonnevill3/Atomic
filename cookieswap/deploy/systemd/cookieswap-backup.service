@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily backup of the cookieswap order database
+
+[Service]
+Type=oneshot
+User=cookieswap
+Group=cookieswap
+UMask=0077
+ExecStart=/usr/local/bin/cookieswap-backup
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cookieswap
+ProtectHome=yes
+PrivateTmp=yes

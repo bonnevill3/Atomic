@@ -1,0 +1,34 @@
+[Unit]
+Description=Monero node (pruned) for cookieswap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=monero
+Group=monero
+ExecStart=/opt/monero/monerod --non-interactive --prune-blockchain --data-dir /var/lib/monero \
+  --rpc-bind-ip 127.0.0.1 --rpc-bind-port 18081 --no-igd --enable-dns-blocklist \
+  --log-file /var/lib/monero/monerod.log --max-log-file-size 10000000 --max-log-files 3
+Restart=always
+RestartSec=10
+TimeoutStopSec=120
+
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/monero
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

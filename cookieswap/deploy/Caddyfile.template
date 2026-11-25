@@ -1,0 +1,16 @@
+# cookieswap: HTTPS (automatic Let's Encrypt certificate) in front of the app on 127.0.0.1:8080.
+# Caddy writes no access logs here, so visitors' IP addresses are not stored.
+__DOMAIN__ {
+	encode zstd gzip
+
+	# The admin API is only reachable from the server itself (ssh in, then use `cookieswap-admin`).
+	@admin path /admin /admin/*
+	respond @admin 404
+
+	reverse_proxy 127.0.0.1:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

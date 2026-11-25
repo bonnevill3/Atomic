@@ -1,5 +1,5 @@
 import { ASSETS } from "./assets";
-import { createWallets } from "./chains";
+import { createDepositVerifiers, createWallets } from "./chains";
 import { loadConfig } from "./config";
 import { Db } from "./db";
 import { Engine } from "./engine";
@@ -21,12 +21,14 @@ async function main() {
 
   // DEX routes only exist on mainnet (THORChain / NEAR Intents have no public testnet).
   const dexes: Partial<Record<DexName, DexProvider>> = {};
-  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_THORCHAIN) dexes.thorchain = new ThorchainProvider(cfg.THORCHAIN_API_URL, cfg.SLIPPAGE_BPS, THORCHAIN, cfg.THORCHAIN_VERIFY_API_URL || undefined);
-  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_MAYA) dexes.maya = new ThorchainProvider(cfg.MAYA_API_URL, cfg.SLIPPAGE_BPS, MAYA, cfg.MAYA_VERIFY_API_URL || undefined);
+  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_THORCHAIN) dexes.thorchain = new ThorchainProvider(cfg.THORCHAIN_API_URL, cfg.SLIPPAGE_BPS, THORCHAIN, cfg.THORCHAIN_VERIFY_API_URL === "none" ? undefined : cfg.THORCHAIN_VERIFY_API_URL);
+  if (cfg.NETWORK === "mainnet" && cfg.ENABLE_MAYA) dexes.maya = new ThorchainProvider(cfg.MAYA_API_URL, cfg.SLIPPAGE_BPS, MAYA, cfg.MAYA_VERIFY_API_URL);
   if (cfg.NETWORK === "mainnet" && cfg.ENABLE_NEAR) dexes.near = new NearIntentsProvider(cfg.NEAR_1CLICK_URL, cfg.SLIPPAGE_BPS, cfg.NEAR_1CLICK_JWT);
 
   const router = new Router(cfg, oracle, Object.values(dexes), wallets);
-  const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE), oracle, createNotifier(cfg));
+  const engine = new Engine(cfg, db, router, wallets, dexes, new DenylistScreening(process.env.DENYLIST_FILE), oracle, createNotifier(cfg),
+    createDepositVerifiers(cfg),
+  );
   const app = await buildServer(cfg, db, router, wallets, oracle, Object.keys(dexes));
 
   await app.listen({ port: cfg.PORT, host: cfg.HOST });

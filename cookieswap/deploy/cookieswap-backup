@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Daily copy of the order database (run by cookieswap-backup.timer). Keeps 14 days.
+# The keys are NOT in here: they are your paper backups of the two recovery phrases.
+set -euo pipefail
+
+DB="${COOKIESWAP_DB:-/var/lib/cookieswap/cookieswap.db}"
+DIR="${COOKIESWAP_BACKUP_DIR:-/var/lib/cookieswap/backups}"
+
+mkdir -p "$DIR"
+[[ -f "$DB" ]] || { echo "no database at $DB yet"; exit 0; }
+OUT="$DIR/cookieswap-$(date -u +%Y-%m-%dT%H%M%SZ).db"
+# .backup takes a consistent copy while the app keeps running (WAL mode)
+sqlite3 "$DB" ".backup '$OUT'"
+chmod 600 "$OUT"
+find "$DIR" -name 'cookieswap-*.db' -mtime +14 -delete
+echo "backup written: $OUT"

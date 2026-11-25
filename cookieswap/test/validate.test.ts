@@ -132,4 +132,20 @@ describe("config safety", () => {
     expect(() => loadConfig({ CHAINS: "live", MNEMONIC: "x", ADMIN_TOKEN: DEV_ADMIN_TOKEN } as NodeJS.ProcessEnv)).toThrow(/public dev token/);
     expect(loadConfig({ CHAINS: "mock", ADMIN_TOKEN: DEV_ADMIN_TOKEN } as NodeJS.ProcessEnv).ADMIN_TOKEN).toBe(DEV_ADMIN_TOKEN);
   });
+
+  it("treats blank settings (KEY=) as not set, so .env.example loads", async () => {
+    const { loadConfig } = await import("../src/config");
+    const c = loadConfig({ CHAINS: "mock", TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "", ALERT_WEBHOOK_URL: "", ADMIN_TOKEN: "", THORCHAIN_VERIFY_API_URL: "" } as NodeJS.ProcessEnv);
+    expect(c.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(c.ADMIN_TOKEN).toBeUndefined();
+    expect(c.THORCHAIN_VERIFY_API_URL).toBe("https://thornode.ninerealms.com"); // blank never switches a check off
+  });
+
+  it("refuses a recovery phrase with a typo instead of opening a different, empty wallet", async () => {
+    const { loadConfig } = await import("../src/config");
+    const base = { CHAINS: "live", ADMIN_TOKEN: "a".repeat(32), ALERT_WEBHOOK_URL: "https://hooks.example.com/x" };
+    expect(loadConfig({ ...base, MNEMONIC: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" } as NodeJS.ProcessEnv).mnemonic).toContain("about");
+    expect(() => loadConfig({ ...base, MNEMONIC: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abuot" } as NodeJS.ProcessEnv))
+      .toThrow(/not a valid BIP39 phrase/);
+  });
 });

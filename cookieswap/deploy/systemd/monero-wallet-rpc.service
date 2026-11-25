@@ -1,0 +1,36 @@
+[Unit]
+Description=Monero wallet RPC for cookieswap (local only)
+After=monerod.service
+Wants=monerod.service
+
+[Service]
+Type=simple
+User=cookieswap
+Group=cookieswap
+# Bound to 127.0.0.1 and only reachable from this machine. Talks to our own monerod, never a remote node.
+ExecStart=/opt/monero/monero-wallet-rpc --non-interactive --daemon-address 127.0.0.1:18081 --trusted-daemon \
+  --rpc-bind-ip 127.0.0.1 --rpc-bind-port 18083 --disable-rpc-login \
+  --wallet-file /var/lib/cookieswap/xmr/cookieswap --password-file /var/lib/cookieswap/secrets/xmr-wallet-password \
+  --log-file /var/lib/cookieswap/xmr/wallet-rpc.log --max-log-file-size 10000000 --max-log-files 3
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cookieswap/xmr
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

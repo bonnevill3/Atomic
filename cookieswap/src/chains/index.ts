@@ -2,11 +2,12 @@ import { type Asset, ASSETS, type EvmChainId, GAS_ASSET, isEvmChain, tokenContra
 import type { Config } from "../config";
 import { BtcKeys, BtcWallet, LITECOIN_COIN } from "./btc";
 import { Erc20Wallet } from "./erc20";
-import { EvmKeys, EvmRpc, EvmWallet } from "./evm";
+import { DEFAULT_RPC, EvmKeys, EvmRpc, EvmWallet } from "./evm";
 import { DryRunWallet, MockWallet } from "./mock";
-import { SolanaKeys, SolWallet, SplWallet } from "./solana";
+import { SolanaKeys, SolWallet, SplAtaSource, SplWallet } from "./solana";
 import { TronApi, TronKeys, TronWallet, TrxWallet } from "./tron";
 import type { ChainWallet, Wallets } from "./types";
+import { BlockcypherUtxoSource, type DepositVerifiers, requireDifferentHost } from "./verify";
 import { XmrWallet } from "./xmr";
 
 /** Well-known BIP39 test vector; only used to give mock deposit addresses a realistic format. */
@@ -41,12 +42,74 @@ function evmSettings(cfg: Config, chain: EvmChainId): { rpcUrl?: string; confirm
   return { rpcUrl, confirmations };
 }
 
+function esploraUrl(cfg: Config): string {
+  return cfg.BTC_ESPLORA_URL ?? (cfg.NETWORK === "mainnet" ? "https://blockstream.info/api" : "https://mempool.space/testnet4/api");
+}
+
+function evmVerifyUrl(cfg: Config, chain: EvmChainId): string {
+  const map = {
+    ETH: cfg.ETH_VERIFY_RPC_URL, BSC: cfg.BSC_VERIFY_RPC_URL, POL: cfg.POL_VERIFY_RPC_URL,
+    BASE: cfg.BASE_VERIFY_RPC_URL, ARB: cfg.ARB_VERIFY_RPC_URL, AVAX: cfg.AVAX_VERIFY_RPC_URL,
+  } as const;
+  return map[chain];
+}
+
+/**
+ * Second, independent view of every depositable asset (live mainnet only; null otherwise). Built from the same
+ * wallet classes pointed at other providers, used read-only: the engine only calls getDeposit on them.
+ * XMR has none: its wallet RPC talks to your own monerod.
+ */
+export function createDepositVerifiers(cfg: Config): DepositVerifiers | null {
+  if (cfg.CHAINS !== "live" || cfg.NETWORK !== "mainnet") return null;
+  const mnemonic = cfg.mnemonic!;
+  const evmKeys = new EvmKeys(mnemonic);
+  const tronKeys = new TronKeys(mnemonic);
+  const solanaKeys = new SolanaKeys(mnemonic);
+
+  requireDifferentHost("BTC", esploraUrl(cfg), cfg.BTC_VERIFY_ESPLORA_URL);
+  requireDifferentHost("TRON", cfg.TRON_API_URL, cfg.TRON_VERIFY_API_URL);
+  requireDifferentHost("SOL", cfg.SOLANA_RPC_URL, cfg.SOLANA_VERIFY_RPC_URL);
+  requireDifferentHost("LTC", cfg.LTC_ESPLORA_URL, "https://api.blockcypher.com");
+  const tron = new TronApi(cfg.TRON_VERIFY_API_URL); // the TronGrid key stays with TronGrid
+  const solana = SplWallet.connect(cfg.SOLANA_VERIFY_RPC_URL);
+  const evmRpcs = new Map<EvmChainId, EvmRpc>();
+  const evmRpc = (chain: EvmChainId) => {
+    if (!evmRpcs.has(chain)) {
+      requireDifferentHost(chain, evmSettings(cfg, chain).rpcUrl ?? DEFAULT_RPC[chain], evmVerifyUrl(cfg, chain));
+      evmRpcs.set(chain, new EvmRpc(chain, cfg.NETWORK, evmVerifyUrl(cfg, chain)));
+    }
+    return evmRpcs.get(chain)!;
+  };
+
+  const v: DepositVerifiers = {
+    BTC: new BtcWallet(new BtcKeys(mnemonic, cfg.NETWORK), cfg.BTC_VERIFY_ESPLORA_URL, cfg.BTC_CONFIRMATIONS),
+    LTC: new BlockcypherUtxoSource("ltc", cfg.LTC_CONFIRMATIONS, cfg.LTC_VERIFY_BLOCKCYPHER_TOKEN),
+    TRX: new TrxWallet(tronKeys, tron),
+    SOL: new SolWallet(solanaKeys, solana),
+  };
+  for (const a of nativeDepositAssets(cfg)) {
+    const chain = a.chain as EvmChainId;
+    v[a.id] = new EvmWallet(a.id, evmKeys, evmRpc(chain), evmSettings(cfg, chain).confirmations);
+  }
+  for (const { asset, contract } of tokens(cfg)) {
+    if (isEvmChain(asset.chain)) {
+      v[asset.id] = new Erc20Wallet(asset.id, contract, evmKeys, evmRpc(asset.chain), evmSettings(cfg, asset.chain).confirmations, GAS_ASSET[asset.chain]);
+    } else if (asset.chain === "TRON") {
+      v[asset.id] = new TronWallet(asset.id, contract, tronKeys, tron);
+    } else if (asset.chain === "SOL") {
+      v[asset.id] = new SplAtaSource(contract, solana);
+    } else {
+      throw new Error(`no deposit double-check for ${asset.id} on ${asset.chain}`);
+    }
+  }
+  return v;
+}
+
 export function createWallets(cfg: Config): Wallets {
   if (cfg.CHAINS === "mock") return createMockWallets(cfg);
 
   const mnemonic = cfg.mnemonic!;
-  const esplora =
-    cfg.BTC_ESPLORA_URL ?? (cfg.NETWORK === "mainnet" ? "https://blockstream.info/api" : "https://mempool.space/testnet4/api");
+  const esplora = esploraUrl(cfg);
   const evmKeys = new EvmKeys(mnemonic);
   const evmRpcs = new Map<EvmChainId, EvmRpc>();
   const evmRpc = (chain: EvmChainId) => {

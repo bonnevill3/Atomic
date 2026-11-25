@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { ASSETS, type AssetId, GAS_ASSET, keyFamily } from "../src/assets";
 import { MockWallet } from "../src/chains/mock";
 import type { Wallets } from "../src/chains/types";
+import type { DepositVerifiers } from "../src/chains/verify";
 import type { OrderRow } from "../src/db";
 import { Engine } from "../src/engine";
 import { type RoutePlan, Router } from "../src/router";
@@ -9,7 +10,7 @@ import { DenylistScreening } from "../src/screening";
 import { FakeDex, RecordingNotifier, setup } from "./helpers";
 
 /** Engine + router over mock wallets for every asset, with a DEX that (like today's DEXes) has no XMR. */
-export function buildFlows(opts: { reviewUsd?: number; dexRate?: number; denylist?: string } = {}) {
+export function buildFlows(opts: { reviewUsd?: number; dexRate?: number; denylist?: string; verifiers?: DepositVerifiers } = {}) {
   const env = setup();
   env.cfg.MANUAL_REVIEW_USD = opts.reviewUsd ?? 500;
   const tokenGas: Partial<Record<AssetId, bigint>> = {
@@ -37,7 +38,8 @@ export function buildFlows(opts: { reviewUsd?: number; dexRate?: number; denylis
   dex.supports = async (f, t) => f.id !== "XMR" && t.id !== "XMR";
   const router = new Router(env.cfg, env.oracle, [dex], wallets);
   const notifier = new RecordingNotifier();
-  const engine = new Engine(env.cfg, env.db, router, wallets, { near: dex }, new DenylistScreening(opts.denylist), env.oracle, notifier);
+  const verifiers = opts.verifiers ?? null;
+  const engine = new Engine(env.cfg, env.db, router, wallets, { near: dex }, new DenylistScreening(opts.denylist), env.oracle, notifier, verifiers);
 
   const run = async (n: number) => {
     for (let i = 0; i < n; i++) await engine.tick();

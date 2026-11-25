@@ -56,7 +56,7 @@ describe("alert channels", () => {
 });
 
 describe("alert configuration", () => {
-  const live = { CHAINS: "live", MNEMONIC: "x", ADMIN_TOKEN: "a".repeat(32) };
+  const live = { CHAINS: "live", MNEMONIC: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", ADMIN_TOKEN: "a".repeat(32) };
 
   it("refuses live chains without an alert channel", () => {
     expect(() => loadConfig(live as NodeJS.ProcessEnv)).toThrow(/requires an alert channel/);

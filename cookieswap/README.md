@@ -140,7 +140,7 @@ cd cookieswap
 npm install
 ADMIN_TOKEN=dev-admin-token-0123456789abcdef npm run dev   # CHAINS=mock, DRY_RUN=true by default
 # open http://127.0.0.1:8080, create a swap, open "Developer: simulate deposit"
-npm test            # 122 tests: engine, slippage, review gate + operator alerts, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks
+npm test            # 134 tests: engine, slippage, review gate + operator alerts, stablecoin + top-20 coin flows, BTC/LTC/EVM/Tron/Solana wallets, address checks, deposit double-check
 npm run typecheck
 npm run smoke       # read-only check of the live BTC/ETH/Solana backends (throwaway key)
 ```
@@ -195,6 +195,7 @@ any send interrupted by a crash → needs_review   (never re-sent automatically)
 | `POST /admin/mock/deposit` `{orderId}` | mock mode only |
 
 ## Going live (checklist)
+**Use the setup kit: [`deploy/README.md`](deploy/README.md).** One script sets up a fresh Ubuntu 24.04 server: HTTPS, your own Monero node, keys created on the server with a paper-backup check, alerts, firewall and backups. The server starts in dry run, and every deposit is held for you. The checklist below explains what the kit does and why.
 1. **Separate machine.** Run the hot wallet host on its own machine, behind Tor/HTTPS. Expose only the web port, never wallet-rpc.
 2. **Hot wallet keys.** See [Security review](#security-review-24-nov-2026) for server hardening.
    - Generate a fresh mnemonic and keep it in `MNEMONIC_FILE` (`chmod 600`).
@@ -245,8 +246,23 @@ A review of all code paths that move funds. Fixed, each with tests:
 | Token refunds were paid with our gas, even for dust | attackers could drain gas inventory (~15 TRX per Tron refund) | the gas is deducted from the refunded tokens; deposits worth less than the fee go to review |
 | Internal error text (e.g. RPC URLs with API keys) could appear in quote errors | leaked API keys | only our own messages reach users |
 | Inventory payouts accepted a single price source | a glitch or manipulated price on one source could pay out too much | two agreeing sources required (`MIN_PRICE_SOURCES`) |
+| Each deposit was read from one outside API (Esplora, an RPC provider, TronGrid, ...) | a compromised API could fake a deposit and get paid from inventory | **deposit double-check**: an independent provider must confirm the same amount before we act (see below); XMR uses your own node |
+| A recovery phrase with a typo was accepted | a mistyped restore would silently open a different, empty wallet | the app refuses an invalid BIP39 phrase |
 | BCH `bitcoincash:` prefix broke THORChain memos; memos over 80 bytes failed only after the swap had started | refunds / orders stuck in review | prefix stripped; long memos rejected at quote time |
 | Behind a reverse proxy every visitor shared one rate limit | spam could block real users | `TRUST_PROXY` setting |
+
+**Deposit double-check.** Before cookieswap acts on a deposit (paying from inventory, forwarding or refunding), a second provider run by someone else must see the same confirmed amount. If it doesn't (lagging, unreachable, or disagreeing), the order is held; after 30 minutes it goes to review with an alert. Defaults, each a different operator than the chain's primary:
+
+| Chain | Primary | Second source |
+|---|---|---|
+| BTC | blockstream.info | mempool.space |
+| LTC | litecoinspace.org | BlockCypher |
+| ETH, BSC, Polygon, Base, Arbitrum, Avalanche | publicnode (or your own key) | drpc / the chains' official RPCs |
+| Tron | TronGrid | publicnode |
+| Solana | api.mainnet-beta | publicnode (reads the deposit's token account directly) |
+| XMR | your own `monerod` | not needed |
+
+The server refuses to start if a second source is run by the same provider as the primary.
 
 No code can make a hot wallet unhackable. What protects the funds beyond the code:
 - **The server is the key.** Anyone who gets a shell on it can read the mnemonic. Use a dedicated machine or VPS with SSH keys only (no passwords), automatic security updates, a firewall that only opens 443, and nothing else running on it.

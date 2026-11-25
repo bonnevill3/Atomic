@@ -50,6 +50,8 @@ export class XmrWallet implements ChainWallet {
 
   async depositAddress(_index: number) {
     const r = await this.rpc<{ address: string; address_index: number }>("create_address", { account_index: 0, label: "order" });
+    // Persist the new subaddress count now: after a crash the wallet must never hand out this index again.
+    await this.rpc("store");
     return { address: r.address, index: r.address_index };
   }
 

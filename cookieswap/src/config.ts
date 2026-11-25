@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { validateMnemonic } from "bip39";
 import { z } from "zod";
 
 const bool = z
@@ -50,6 +51,22 @@ const schema = z.object({
   TRONGRID_API_KEY: z.string().optional(),
   /** Solana (SPL). Confirmed = "finalized" commitment. */
   SOLANA_RPC_URL: z.string().default("https://api.mainnet-beta.solana.com"),
+
+  /**
+   * Deposit double-check (live mainnet): before acting on a deposit, an independent provider must see it too.
+   * Each must be a different operator than the chain's primary backend above. XMR is exempt: monero-wallet-rpc
+   * talks to your own monerod.
+   */
+  BTC_VERIFY_ESPLORA_URL: z.string().default("https://mempool.space/api"),
+  LTC_VERIFY_BLOCKCYPHER_TOKEN: z.string().optional(),
+  ETH_VERIFY_RPC_URL: z.string().default("https://eth.drpc.org"),
+  BSC_VERIFY_RPC_URL: z.string().default("https://bsc-dataseed.bnbchain.org"),
+  POL_VERIFY_RPC_URL: z.string().default("https://polygon.drpc.org"),
+  BASE_VERIFY_RPC_URL: z.string().default("https://mainnet.base.org"),
+  ARB_VERIFY_RPC_URL: z.string().default("https://arb1.arbitrum.io/rpc"),
+  AVAX_VERIFY_RPC_URL: z.string().default("https://api.avax.network/ext/bc/C/rpc"),
+  TRON_VERIFY_API_URL: z.string().default("https://tron-rpc.publicnode.com"),
+  SOLANA_VERIFY_RPC_URL: z.string().default("https://solana-rpc.publicnode.com"),
   /** monero-wallet-rpc started with --disable-rpc-login, reachable only on localhost / a private network. */
   XMR_WALLET_RPC_URL: z.string().default("http://127.0.0.1:18083/json_rpc"),
   XMR_CONFIRMATIONS: z.coerce.number().int().min(1).default(10),
@@ -62,7 +79,7 @@ const schema = z.object({
   MAYA_API_URL: z.string().default("https://mayanode.mayachain.info"),
   /**
    * Independent nodes used to confirm every vault address before we send to it. THORCHAIN_API_URL is a
-   * third-party gateway, so THORChain is checked by default; set an empty string to disable.
+   * third-party gateway, so THORChain is checked by default ("none" disables it); Maya only when set.
    */
   THORCHAIN_VERIFY_API_URL: z.string().default("https://thornode.ninerealms.com"),
   MAYA_VERIFY_API_URL: z.string().optional(),
@@ -122,7 +139,8 @@ export type Config = z.infer<typeof schema> & { mnemonic?: string };
 export const DEV_ADMIN_TOKEN = "dev-admin-token-0123456789abcdef";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = schema.safeParse(env);
+  // `KEY=` (blank) in a .env file means "not set", as in .env.example.
+  const parsed = schema.safeParse(Object.fromEntries(Object.entries(env).filter(([, v]) => v !== "")));
   if (!parsed.success) {
     throw new Error(`Invalid configuration:\n${z.prettifyError(parsed.error)}`);
   }
@@ -147,6 +165,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (cfg.CHAINS === "live" && !cfg.DRY_RUN && cfg.NETWORK === "mainnet" && !cfg.ADMIN_TOKEN) {
     throw new Error("Refusing to run live on mainnet without ADMIN_TOKEN (needed for refunds/review)");
+  }
+  // Any text derives *some* keys, so a typo in a restored phrase would silently open a different, empty wallet.
+  if (cfg.CHAINS === "live" && !validateMnemonic(cfg.mnemonic!)) {
+    throw new Error("the recovery phrase in MNEMONIC_FILE is not a valid BIP39 phrase (check every word for typos)");
   }
   return cfg;
 }

@@ -277,3 +277,34 @@ export class SolWallet implements ChainWallet {
     return { txid: signature, amount, fee: BigInt(SOL_TRANSFER_FEE_LAMPORTS) };
   }
 }
+
+/**
+ * Deposit double-check for SPL tokens: reads the deposit's associated token account directly (a plain
+ * account read; public RPCs often block the token-index lookups the wallet itself uses). It is also the only
+ * token account our sweep can move, so tokens anywhere else must not count.
+ */
+export class SplAtaSource {
+  private mint: Address;
+
+  constructor(
+    mint: string,
+    private rpc: SolanaRpc,
+  ) {
+    this.mint = address(mint);
+  }
+
+  private async amount(ata: Address, commitment: Commitment): Promise<bigint> {
+    const r = await this.rpc.getAccountInfo(ata, { encoding: "jsonParsed", commitment }).send();
+    if (!r.value) return 0n; // no token account yet: nothing deposited
+    const data = r.value.data as { parsed?: { info?: { mint?: string; tokenAmount?: { amount: string } } } };
+    const info = data.parsed?.info;
+    if (!info?.tokenAmount || info.mint !== this.mint) throw new Error(`unexpected token account data at ${ata}`);
+    return BigInt(info.tokenAmount.amount);
+  }
+
+  async getDeposit(owner: string): Promise<DepositInfo> {
+    const [ata] = await findAssociatedTokenPda({ owner: address(owner), mint: this.mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    const [seen, confirmed] = await Promise.all([this.amount(ata, "confirmed"), this.amount(ata, "finalized")]);
+    return { seen, confirmed, txids: [] };
+  }
+}

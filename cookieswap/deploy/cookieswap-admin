@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# cookieswap admin commands. Run on the server (ssh in first); the admin API is not reachable from outside.
+set -euo pipefail
+
+ENV_FILE="${COOKIESWAP_ENV_FILE:-/etc/cookieswap/cookieswap.env}"
+API="${COOKIESWAP_API:-http://127.0.0.1:8080}"
+
+if [[ ! -r "$ENV_FILE" ]]; then
+  if [[ $EUID -ne 0 ]]; then exec sudo --preserve-env=COOKIESWAP_ENV_FILE,COOKIESWAP_API "$0" "$@"; fi
+  echo "cannot read $ENV_FILE" >&2
+  exit 1
+fi
+TOKEN="$(grep -E '^ADMIN_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+[[ -n "$TOKEN" ]] || { echo "ADMIN_TOKEN missing in $ENV_FILE" >&2; exit 1; }
+
+call() {
+  local method="$1" path="$2" body="${3:-}"
+  local args=(-s --fail-with-body -X "$method" -H "authorization: Bearer $TOKEN")
+  if [[ -n "$body" ]]; then args+=(-H "content-type: application/json" --data "$body"); fi
+  local out
+  if ! out="$(curl "${args[@]}" "$API$path")"; then
+    if [[ -z "$out" ]]; then echo "cannot reach cookieswap at $API (check: systemctl status cookieswap)" >&2
+    else printf 'refused: %s\n' "$(jq -r '.error // .' <<<"$out" 2>/dev/null || printf '%s' "$out")" >&2; fi
+    exit 1
+  fi
+  printf '%s\n' "$out"
+}
+
+id_arg() {
+  [[ "${1:-}" =~ ^[0-9a-f]{8,64}$ ]] || { echo "give a valid order id" >&2; exit 1; }
+}
+
+usage() {
+  cat <<'EOF'
+cookieswap-admin <command>
+
+  held                       orders above the review limit, waiting for you
+  review                     orders that need a human (stuck, failed, too small to refund, ...)
+  orders [status]            all recent orders (optionally one status)
+  order <id>                 one order in full
+
+  approve <id>               let the engine swap a held order (it re-checks the rate first)
+  fill <id> <txid> <amount>  you paid a held order by hand: record payout tx and amount sent
+  refund <id>                refund to the customer's refund address
+  retry <id>                 re-run a needs_review order (ONLY after checking nothing was sent)
+  resolved <id> <txid>       a needs_review order you refunded by hand
+
+  addresses                  where to send working funds (inventory address per coin)
+  inventory                  current inventory and gas balances
+  health                     is the app up, and in which mode
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+case "$cmd" in
+  held) call GET "/admin/orders?status=awaiting_approval" | jq '[.[] | {id, from_asset, to_asset, received_amount, quoted_out, recipient, error, created_at: (.created_at / 1000 | todate)}]' ;;
+  review) call GET "/admin/orders?status=needs_review" | jq '[.[] | {id, from_asset, to_asset, received_amount, deposit_address, error, updated_at: (.updated_at / 1000 | todate)}]' ;;
+  orders)
+    if [[ -n "${1:-}" ]]; then call GET "/admin/orders?status=$(jq -rn --arg s "$1" '$s|@uri')" | jq .
+    else call GET "/admin/orders" | jq '[.[] | {id, status, from_asset, to_asset, amount_in, created_at: (.created_at / 1000 | todate)}]'; fi ;;
+  order) id_arg "${1:-}"; call GET "/admin/orders" | jq --arg id "$1" '.[] | select(.id == $id)' ;;
+  approve) id_arg "${1:-}"; call POST "/admin/orders/$1/approve" | jq . ;;
+  refund) id_arg "${1:-}"; call POST "/admin/orders/$1/refund" | jq . ;;
+  retry) id_arg "${1:-}"; call POST "/admin/orders/$1/retry" | jq . ;;
+  fill)
+    id_arg "${1:-}"
+    [[ -n "${2:-}" && -n "${3:-}" ]] || { echo "usage: cookieswap-admin fill <id> <payout txid> <amount sent>" >&2; exit 1; }
+    call POST "/admin/orders/$1/resolve" "$(jq -cn --arg t "$2" --arg a "$3" '{status: "completed", txid: $t, amountOut: $a}')" | jq . ;;
+  resolved)
+    id_arg "${1:-}"
+    [[ -n "${2:-}" ]] || { echo "usage: cookieswap-admin resolved <id> <refund txid>" >&2; exit 1; }
+    call POST "/admin/orders/$1/resolve" "$(jq -cn --arg t "$2" '{status: "refunded", txid: $t}')" | jq . ;;
+  addresses) call GET "/admin/addresses" | jq -r '.[] | [.asset, .network, .address, (if .gasCoin and .gasCoin != .asset then "(needs " + .gasCoin + " for gas)" else "" end)] | @tsv' \
+      | awk -F'\t' '{ printf "%-10s %-26s %s  %s\n", $1, $2, $3, $4 }' ;;
+  inventory) call GET "/admin/inventory" | jq . ;;
+  health) curl -sS "$API/api/health" | jq . ;;
+  help | -h | --help) usage ;;
+  *) usage; exit 1 ;;
+esac

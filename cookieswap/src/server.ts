@@ -5,7 +5,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import QRCode from "qrcode";
 import { z } from "zod";
-import { ASSETS, type Asset, type EvmChainId, getAsset, isEvmChain, isValidAddress, keyFamily, NETWORK_CODE, tokenContract } from "./assets";
+import { ASSETS, type Asset, type EvmChainId, GAS_ASSET, getAsset, isEvmChain, isValidAddress, keyFamily, NETWORK_CODE, tokenContract } from "./assets";
 import { MockWallet } from "./chains/mock";
 import type { Wallets } from "./chains/types";
 import type { Config } from "./config";
@@ -315,6 +315,17 @@ export async function buildServer(
         }
         return out;
       });
+
+      /**
+       * Where to send working funds: each asset's inventory address, plus the gas coin its forwards need.
+       * Tokens on one chain share that chain's inventory address.
+       */
+      admin.get("/admin/addresses", async () =>
+        Promise.all(Object.entries(wallets).map(async ([id, w]) => {
+          const a = getAsset(id)!;
+          return { asset: id, network: a.network, address: await w!.inventoryAddress(), gasCoin: GAS_ASSET[a.chain] ?? null };
+        })),
+      );
 
       /** Force a refund (from awaiting/confirming/needs_review). Verify on-chain state first for needs_review. */
       admin.post<{ Params: { id: string } }>("/admin/orders/:id/refund", async (req) => {
